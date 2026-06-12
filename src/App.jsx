@@ -2,6 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const STORAGE_KEY = "vibe-deck-project-v1";
 const SETTINGS_KEY = "vibe-deck-settings-v1";
+const defaultAiConfig = {
+  language: "Match source",
+  factuality: "Strict",
+  preserveMeaning: true,
+  noInventedFacts: true,
+  respectNodeScope: true,
+  defaultSamples: 3,
+  advancedInstructions: "",
+};
 
 const aspectRatios = { wide: 16 / 9, standard: 4 / 3, portrait: 3 / 4 };
 const nodeTypes = {
@@ -37,18 +46,22 @@ const initialProject = {
     talkingPoints: "",
     tone: "Confident",
   },
+  aiConfig: defaultAiConfig,
   slides: [blankSlide()],
 };
 
 function normalizeProject(saved) {
   if (!saved) return initialProject;
-  if (Array.isArray(saved.slides) && saved.slides.length) return saved;
+  if (Array.isArray(saved.slides) && saved.slides.length) {
+    return { ...saved, aiConfig: { ...defaultAiConfig, ...saved.aiConfig } };
+  }
   const slide = blankSlide();
   slide.background = saved.background || "#ffffff";
   slide.elements = saved.elements || [];
   return {
     ...initialProject,
     ...saved,
+    aiConfig: { ...defaultAiConfig, ...saved.aiConfig },
     background: undefined,
     elements: undefined,
     slides: [slide],
@@ -142,6 +155,7 @@ function App() {
   const [notice, setNotice] = useState("All changes saved locally");
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState("ai");
   const [refineOpen, setRefineOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [contextMenu, setContextMenu] = useState(null);
@@ -389,6 +403,7 @@ function App() {
           apiKey: settings.apiKey,
           model: settings.model,
           context: project.context,
+          aiConfig: project.aiConfig,
           feedback,
           elements: slide.elements,
         }),
@@ -449,7 +464,7 @@ function App() {
           <button type="button" className="icon-button" onClick={undo} disabled={!history.length} title="Undo">{icon("undo")}</button>
           <button type="button" className="icon-button" onClick={redo} disabled={!future.length} title="Redo">{icon("redo")}</button>
           <span className="save-state">{notice}</span>
-          <button type="button" onClick={() => setSettingsOpen(true)}>{icon("settings")} Settings</button>
+          <button type="button" onClick={() => { setSettingsTab("ai"); setSettingsOpen(true); }}>{icon("settings")} AI Instructions</button>
           <button type="button" className="primary" onClick={exportPptx} disabled={busy}>{icon("download")} Export PPTX</button>
         </div>
       </header>
@@ -589,10 +604,37 @@ function App() {
       )}
 
       {settingsOpen && (
-        <Modal title="Settings" onClose={() => setSettingsOpen(false)}>
-          <Field label="OpenAI API key" type="password" value={settings.apiKey} onChange={(value) => setSettings((current) => ({ ...current, apiKey: value }))} placeholder="sk-..." />
-          <Field label="Model" value={settings.model} onChange={(value) => setSettings((current) => ({ ...current, model: value }))} placeholder="gpt-5.5" />
-          <p className="security-note">The key stays in this browser and is sent through your local server only when you refine a page.</p>
+        <Modal title="AI Instructions" wide onClose={() => setSettingsOpen(false)}>
+          <div className="settings-tabs">
+            <button type="button" className={settingsTab === "ai" ? "active" : ""} onClick={() => setSettingsTab("ai")}>Behavior</button>
+            <button type="button" className={settingsTab === "connection" ? "active" : ""} onClick={() => setSettingsTab("connection")}>Connection</button>
+          </div>
+          {settingsTab === "ai" ? (
+            <div className="ai-config-grid">
+              <section className="config-form">
+                <div className="config-intro">
+                  <strong>Project AI rules</strong>
+                  <span>These settings apply to every Refine Page action in this deck.</span>
+                </div>
+                <div className="two-column">
+                  <Select label="Output language" value={project.aiConfig.language} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, language: value } }))} options={["Match source", "English", "Traditional Chinese", "Simplified Chinese", "Japanese"]} />
+                  <Select label="Factuality" value={project.aiConfig.factuality} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, factuality: value } }))} options={["Strict", "Balanced", "Creative"]} />
+                </div>
+                <RangeField label="Alternatives considered" value={project.aiConfig.defaultSamples} min="1" max="5" onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, defaultSamples: Number(value) } }))} />
+                <Toggle label="Preserve original meaning" description="Improve wording without changing the core claim." checked={project.aiConfig.preserveMeaning} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, preserveMeaning: value } }))} />
+                <Toggle label="Do not invent facts" description="Never add unsupported numbers, sources, customers, or claims." checked={project.aiConfig.noInventedFacts} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, noInventedFacts: value } }))} />
+                <Toggle label="Respect node scope" description="Apply node directions only to their connected objects." checked={project.aiConfig.respectNodeScope} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, respectNodeScope: value } }))} />
+                <Field label="Advanced instructions" value={project.aiConfig.advancedInstructions} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, advancedInstructions: value } }))} placeholder="Example: Lead with a claim. Avoid consulting jargon. Keep product names unchanged." area />
+              </section>
+              <InstructionHierarchy />
+            </div>
+          ) : (
+            <div className="connection-settings">
+              <Field label="OpenAI API key" type="password" value={settings.apiKey} onChange={(value) => setSettings((current) => ({ ...current, apiKey: value }))} placeholder="sk-..." />
+              <Field label="Model" value={settings.model} onChange={(value) => setSettings((current) => ({ ...current, model: value }))} placeholder="gpt-5.5" />
+              <p className="security-note">The key stays in this browser and is sent through your local server only when you refine a page.</p>
+            </div>
+          )}
           <button type="button" className="primary full" onClick={() => setSettingsOpen(false)}>Save settings</button>
         </Modal>
       )}
@@ -727,10 +769,32 @@ function PositionGrid({ element, update }) {
   return <div className="position-grid">{["x", "y", "w", "h"].map((key) => <label key={key}><span>{key.toUpperCase()}</span><input type="number" value={Math.round(element[key] * 10) / 10} onChange={(event) => update({ [key]: Number(event.target.value) })} /></label>)}</div>;
 }
 
-function Modal({ title, onClose, children }) {
+function InstructionHierarchy() {
+  const levels = [
+    ["1", "Safety rules", "Always enforced"],
+    ["2", "Project AI rules", "This settings screen"],
+    ["3", "Deck context", "Audience, purpose, tone"],
+    ["4", "Connected nodes", "Object-specific direction"],
+    ["5", "Latest feedback", "Current Refine Page request"],
+  ];
+  return (
+    <aside className="instruction-hierarchy">
+      <strong>Control priority</strong>
+      <p>When instructions conflict, the higher rule wins.</p>
+      {levels.map(([number, title, detail]) => (
+        <div className="hierarchy-level" key={number}>
+          <b>{number}</b>
+          <span><strong>{title}</strong><small>{detail}</small></span>
+        </div>
+      ))}
+    </aside>
+  );
+}
+
+function Modal({ title, wide, onClose, children }) {
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="modal" onMouseDown={(event) => event.stopPropagation()}>
+      <div className={`modal ${wide ? "wide" : ""}`} onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-header"><div><small>VIBE DECK</small><h2>{title}</h2></div><button type="button" className="close" onClick={onClose}>×</button></div>
         {children}
       </div>
@@ -752,6 +816,15 @@ function ColorField({ label, value, onChange }) {
 
 function RangeField({ label, value, min, max, onChange }) {
   return <label className="field range-field"><span>{label}<b>{value}</b></span><input type="range" value={value} min={min} max={max} onChange={(event) => onChange(event.target.value)} /></label>;
+}
+
+function Toggle({ label, description, checked, onChange }) {
+  return (
+    <label className="toggle-row">
+      <span><strong>{label}</strong><small>{description}</small></span>
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+    </label>
+  );
 }
 
 export default App;

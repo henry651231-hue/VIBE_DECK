@@ -2,6 +2,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildPptx } from "./export.js";
+import { buildRefinementPrompt } from "./refinePrompt.js";
 
 const app = express();
 const port = Number(process.env.PORT || 4174);
@@ -27,49 +28,12 @@ app.post("/api/export", async (request, response) => {
 });
 
 app.post("/api/refine", async (request, response) => {
-  const { apiKey, model = "gpt-5.5", context, feedback, elements = [] } = request.body;
+  const { apiKey, model = "gpt-5.5", context, aiConfig, feedback, elements = [] } = request.body;
   if (!apiKey) {
     return response.status(400).json({ error: "Add an OpenAI API key in Settings first." });
   }
 
-  const existingContent = elements
-    .filter((element) => element.type === "text" || element.type === "shape")
-    .map((element) => element.text)
-    .filter(Boolean);
-  const textById = new Map(
-    elements
-      .filter((element) => element.type === "text" || element.type === "shape")
-      .map((element) => [element.id, element.text || ""]),
-  );
-  const nodeDirections = elements
-    .filter((element) => element.type === "node")
-    .map((element) => {
-      const linkedText = (element.connections || []).map((targetId) => textById.get(targetId)).filter(Boolean);
-      return `${element.nodeKind}: ${element.value}; apply to: ${linkedText.join(" | ") || "no object linked"}`;
-    })
-    .join("\n");
-
-  const prompt = `
-You are the content editor inside Vibe Deck, a presentation creation tool.
-Create concise content for exactly one presentation slide. Return JSON only.
-
-Presenter: ${context.whoAmI || "Not provided"}
-Target audience: ${context.audience || "Not provided"}
-Purpose: ${context.purpose || "Not provided"}
-Key facts or stacks: ${context.keyStacks || "Not provided"}
-Desired vibe: ${context.vibe || "Clear and modern"}
-Tone: ${context.tone || "Confident"}
-Talking points: ${context.talkingPoints || "Not provided"}
-Content size: ${context.contentSize || "Medium"}
-User feedback: ${feedback || "Create the first draft."}
-Existing slide text: ${existingContent.join(" | ") || "The slide is blank."}
-Slide direction nodes:
-${nodeDirections || "No direction nodes."}
-
-Use this exact JSON shape:
-{"eyebrow":"short section label","title":"one strong claim, maximum 12 words","points":["2-4 concise supporting points"],"footer":"optional short source or takeaway"}
-Do not use markdown. Do not invent statistics, sources, customers, or factual claims not present in the input.
-`;
+  const prompt = buildRefinementPrompt({ context, aiConfig, feedback, elements });
 
   try {
     const openaiResponse = await fetch("https://api.openai.com/v1/responses", {

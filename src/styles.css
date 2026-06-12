@@ -121,6 +121,7 @@ button:disabled { cursor: default; opacity: .35; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; background: rgba(10,12,14,.55); backdrop-filter: blur(5px); }
 .modal { width: 430px; padding: 24px; border-radius: 14px; background: white; box-shadow: 0 24px 90px rgba(0,0,0,.28); }
+.modal.wide { width: min(780px, calc(100vw - 40px)); max-height: calc(100vh - 40px); overflow: auto; }
 .modal-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 22px; }
 .modal-header small { color: #1687c8; font-size: 9px; font-weight: 900; letter-spacing: .15em; }
 .modal h2 { margin: 3px 0 0; font-size: 22px; }
@@ -128,6 +129,29 @@ button:disabled { cursor: default; opacity: .35; }
 .close { border: 0; background: transparent; color: #858c92; font-size: 27px; line-height: 1; }
 .modal-copy, .security-note { margin: 0 0 18px; color: #747b81; font-size: 11px; line-height: 1.5; }
 .full { width: 100%; height: 41px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 8px; }
+.settings-tabs { display: flex; gap: 5px; margin: -8px 0 20px; padding: 4px; border-radius: 8px; background: #f1f3f4; }
+.settings-tabs button { flex: 1; height: 34px; border: 0; border-radius: 6px; color: #737a80; background: transparent; font-size: 11px; font-weight: 800; }
+.settings-tabs button.active { color: #1687c8; background: white; box-shadow: 0 1px 4px rgba(20,25,28,.1); }
+.ai-config-grid { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 24px; margin-bottom: 20px; }
+.config-form { display: flex; flex-direction: column; gap: 14px; }
+.config-intro { display: flex; flex-direction: column; gap: 4px; }
+.config-intro strong { font-size: 13px; }
+.config-intro span { color: #7a8187; font-size: 10px; }
+.toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 10px 12px; border: 1px solid #e0e4e7; border-radius: 8px; background: #fafbfb; }
+.toggle-row > span { display: flex; flex-direction: column; gap: 3px; }
+.toggle-row strong { font-size: 11px; }
+.toggle-row small { color: #7d848a; font-size: 9px; line-height: 1.4; }
+.toggle-row input { width: 17px; height: 17px; accent-color: #1d9fe2; }
+.instruction-hierarchy { padding: 16px; border-radius: 10px; color: white; background: #171a1d; }
+.instruction-hierarchy > strong { font-size: 13px; }
+.instruction-hierarchy > p { margin: 5px 0 14px; color: #969da3; font-size: 9px; line-height: 1.4; }
+.hierarchy-level { display: grid; grid-template-columns: 24px 1fr; gap: 9px; align-items: center; padding: 9px 0; border-top: 1px solid #2d3236; }
+.hierarchy-level > b { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 99px; color: #9dddff; background: #243b48; font-size: 9px; }
+.hierarchy-level span { display: flex; flex-direction: column; gap: 2px; }
+.hierarchy-level strong { font-size: 10px; }
+.hierarchy-level small { color: #8f979d; font-size: 8px; }
+.connection-settings { max-width: 500px; margin: 0 auto 20px; }
+.connection-settings .field { margin-bottom: 15px; }
 
 @media (max-height: 720px) {
   .panel-content { padding: 13px 16px; gap: 10px; }
