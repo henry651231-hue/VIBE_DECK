@@ -3,7 +3,6 @@ import {
   applyEdgeChanges,
   applyNodeChanges,
   Background,
-  Controls,
   Handle,
   MarkerType,
   Position,
@@ -14,22 +13,10 @@ import "@xyflow/react/dist/style.css";
 
 const STORAGE_KEY = "vibe-deck-project-v1";
 const SETTINGS_KEY = "vibe-deck-settings-v1";
-const defaultAiConfig = {
-  language: "Match source",
-  factuality: "Strict",
-  preserveMeaning: true,
-  noInventedFacts: true,
-  respectNodeScope: true,
-  defaultSamples: 3,
-  advancedInstructions: "",
-};
 
 const aspectRatios = { wide: 16 / 9, standard: 4 / 3, portrait: 3 / 4 };
 const instructionTypes = {
-  wordCount: { label: "Content length", hint: "WORDS", color: "#7c5ce7", value: "80 words" },
-  vibe: { label: "Writing direction", hint: "VIBE", color: "#e05d87", value: "Clear and visionary" },
-  fontSize: { label: "Font size", hint: "TYPE", color: "#ed8b32", value: "24 pt" },
-  samples: { label: "AI samples", hint: "OPTIONS", color: "#18a58b", value: "3 samples" },
+  vibe: { label: "Writing direction", hint: "DIRECTION", color: "#e05d87", value: "Clear and visionary" },
 };
 
 function id() {
@@ -41,7 +28,7 @@ function clone(value) {
 }
 
 function blankSlide() {
-  return { id: id(), name: "Untitled slide", background: "#ffffff", hidden: false, elements: [], instructionNodes: [], edges: [] };
+  return { id: id(), background: "#ffffff", hidden: false, elements: [], instructionNodes: [], edges: [] };
 }
 
 const initialProject = {
@@ -54,20 +41,17 @@ const initialProject = {
     purpose: "",
     keyStacks: "",
     vibe: "",
-    contentSize: "Medium",
-    talkingPoints: "",
-    tone: "Confident",
   },
-  aiConfig: defaultAiConfig,
   slides: [blankSlide()],
 };
 
 function normalizeProject(saved) {
   if (!saved) return initialProject;
+  const cleanSaved = { ...saved };
+  delete cleanSaved.aiConfig;
   if (Array.isArray(saved.slides) && saved.slides.length) {
     return {
-      ...saved,
-      aiConfig: { ...defaultAiConfig, ...saved.aiConfig },
+      ...cleanSaved,
       slides: saved.slides.map(migrateSlideGraph),
     };
   }
@@ -76,8 +60,7 @@ function normalizeProject(saved) {
   slide.elements = saved.elements || [];
   return {
     ...initialProject,
-    ...saved,
-    aiConfig: { ...defaultAiConfig, ...saved.aiConfig },
+    ...cleanSaved,
     background: undefined,
     elements: undefined,
     slides: [slide],
@@ -86,8 +69,9 @@ function normalizeProject(saved) {
 
 function migrateSlideGraph(slide) {
   const legacyNodes = (slide.elements || []).filter((element) => element.type === "node");
-  const instructionNodes = slide.instructionNodes || legacyNodes.map(({ connections, ...node }) => node);
-  const edges = slide.edges || legacyNodes.flatMap((node) =>
+  const instructionNodes = (slide.instructionNodes || legacyNodes.map(({ connections, ...node }) => node))
+    .filter((node) => node.nodeKind === "vibe");
+  const rawEdges = slide.edges || legacyNodes.flatMap((node) =>
     (node.connections || []).map((targetId) => ({
       id: id(),
       source: node.id,
@@ -95,9 +79,16 @@ function migrateSlideGraph(slide) {
       type: "smoothstep",
     })),
   );
+  const nodeIds = new Set(instructionNodes.map((node) => node.id));
+  const edges = rawEdges
+    .filter((edge) => nodeIds.has(edge.source))
+    .map((edge) => ({ ...edge, sourceHandle: edge.sourceHandle || "instruction", targetHandle: edge.targetHandle || "left" }));
   return {
     ...slide,
-    elements: (slide.elements || []).filter((element) => element.type !== "node"),
+    background: slide.background || "#ffffff",
+    elements: (slide.elements || [])
+      .filter((element) => element.type !== "node")
+      .map((element) => element.type === "shape" ? { ...element, text: "" } : element),
     instructionNodes,
     edges,
   };
@@ -125,7 +116,7 @@ function newText(defaults, overrides = {}) {
 
 function newShape(defaults) {
   return {
-    ...newText(defaults, { type: "shape", text: "Shape text", x: 50, y: 24, w: 30, h: 24 }),
+    ...newText(defaults, { type: "shape", text: "", x: 50, y: 24, w: 30, h: 24 }),
     fill: "#e9edf2",
     borderColor: "#b8c0c7",
     borderWidth: 1,
@@ -141,8 +132,8 @@ function newNode(kind) {
     value: definition.value,
     x: 67,
     y: 62,
-    w: 22,
-    h: 12,
+    w: 11,
+    h: 7,
   };
 }
 
@@ -160,6 +151,12 @@ const icon = (name) => {
     eyeOff: "M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.8 5.2A10.7 10.7 0 0 1 12 5c5.5 0 9 7 9 7a16 16 0 0 1-2.1 3M6.2 6.2C3.9 7.8 3 12 3 12s3.5 7 9 7a9 9 0 0 0 3-.5",
     copy: "M8 8h11v11H8zM5 16H4V5h11v1",
     chevron: "m8 10 4 4 4-4",
+    folder: "M3 6h7l2 2h9v11H3z",
+    save: "M5 3h12l2 2v16H5zM8 3v6h8V3M8 21v-7h8v7",
+    panel: "M4 4h16v16H4zM9 4v16",
+    zoomIn: "M11 8v6m-3-3h6m4 7-4-4M10.5 19a8.5 8.5 0 1 1 0-17 8.5 8.5 0 0 1 0 17Z",
+    zoomOut: "M8 11h6m4 7-4-4M10.5 19a8.5 8.5 0 1 1 0-17 8.5 8.5 0 0 1 0 17Z",
+    clock: "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
   };
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={paths[name]} /></svg>;
 };
@@ -185,23 +182,26 @@ function App() {
   const [panel, setPanel] = useState("context");
   const [history, setHistory] = useState([]);
   const [future, setFuture] = useState([]);
-  const [notice, setNotice] = useState("All changes saved locally");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState("ai");
-  const [refineOpen, setRefineOpen] = useState(false);
-  const [feedback, setFeedback] = useState("");
   const [sampleReview, setSampleReview] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
-  const [nodeMenuOpen, setNodeMenuOpen] = useState(false);
   const [flowNodes, setFlowNodes] = useState([]);
   const [flowEdges, setFlowEdges] = useState([]);
   const [canvasSize, setCanvasSize] = useState({ width: 960, height: 540 });
   const [leftWidth, setLeftWidth] = useState(220);
   const [rightWidth, setRightWidth] = useState(300);
+  const [slidesCollapsed, setSlidesCollapsed] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [generatingIds, setGeneratingIds] = useState([]);
+  const [draggedSlideId, setDraggedSlideId] = useState(null);
+  const [dropIndex, setDropIndex] = useState(null);
   const canvasRef = useRef(null);
   const dragRef = useRef(null);
   const splitRef = useRef(null);
+  const fileHandleRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const slide = project.slides.find((item) => item.id === currentSlideId) || project.slides[0];
   const selected = slide.elements.find((element) => element.id === selectedId);
@@ -210,9 +210,8 @@ function App() {
   useEffect(() => {
     const timer = setTimeout(() => {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
-      setNotice("All changes saved locally");
+      setNotice("");
     }, 250);
-    setNotice("Saving...");
     return () => clearTimeout(timer);
   }, [project]);
 
@@ -237,10 +236,9 @@ function App() {
       data: {
         nodeKind: node.nodeKind,
         value: node.value,
-        connectionCount: slide.edges.filter((edge) => edge.source === node.id).length,
       },
     }));
-    const targetNodes = slide.elements.map((element) => ({
+    const targetNodes = slide.elements.filter((element) => element.type === "text").map((element) => ({
       id: `target:${element.id}`,
       type: "objectTarget",
       position: { x: (element.x / 100) * canvasSize.width, y: (element.y / 100) * canvasSize.height },
@@ -257,6 +255,8 @@ function App() {
         target: `target:${edge.target}`,
         type: "smoothstep",
         markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+        reconnectable: "target",
+        interactionWidth: 18,
         style: { stroke: instructionTypes[sourceNode?.nodeKind]?.color || "#6c55c9", strokeWidth: 2 },
       };
     }));
@@ -264,6 +264,12 @@ function App() {
 
   useEffect(() => {
     const onKey = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z" && !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) {
+        event.preventDefault();
+        if (event.shiftKey) redo();
+        else undo();
+        return;
+      }
       if ((event.key === "Delete" || event.key === "Backspace") && selectedId && !editingId && !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) {
         event.preventDefault();
         removeElement(selectedId);
@@ -342,10 +348,16 @@ function App() {
       const index = current.slides.findIndex((item) => item.id === slideId);
       copied = clone(current.slides[index]);
       copied.id = id();
-      copied.name = `${copied.name} copy`;
-      copied.elements = copied.elements.map((element) => ({ ...element, id: id() }));
-      copied.instructionNodes = [];
-      copied.edges = [];
+      const elementIds = new Map(copied.elements.map((element) => [element.id, id()]));
+      const nodeIds = new Map(copied.instructionNodes.map((node) => [node.id, id()]));
+      copied.elements = copied.elements.map((element) => ({ ...element, id: elementIds.get(element.id) }));
+      copied.instructionNodes = copied.instructionNodes.map((node) => ({ ...node, id: nodeIds.get(node.id) }));
+      copied.edges = copied.edges.map((edge) => ({
+        ...edge,
+        id: id(),
+        source: nodeIds.get(edge.source),
+        target: elementIds.get(edge.target),
+      })).filter((edge) => edge.source && edge.target);
       const slides = [...current.slides];
       slides.splice(index + 1, 0, copied);
       return { ...current, slides };
@@ -368,16 +380,19 @@ function App() {
     setContextMenu(null);
   };
 
-  const reorderSlide = (draggedId, targetId) => {
-    if (draggedId === targetId) return;
+  const reorderSlide = (draggedId, insertionIndex) => {
+    if (!draggedId) return;
     commit((current) => {
       const slides = [...current.slides];
       const from = slides.findIndex((item) => item.id === draggedId);
-      const to = slides.findIndex((item) => item.id === targetId);
+      if (from < 0) return current;
       const [moved] = slides.splice(from, 1);
-      slides.splice(to, 0, moved);
+      const adjustedIndex = insertionIndex > from ? insertionIndex - 1 : insertionIndex;
+      slides.splice(Math.max(0, Math.min(slides.length, adjustedIndex)), 0, moved);
       return { ...current, slides };
     });
+    setDraggedSlideId(null);
+    setDropIndex(null);
   };
 
   const undo = () => {
@@ -464,8 +479,8 @@ function App() {
       ...current,
       instructionNodes: current.instructionNodes.map((item) => item.id === node.id ? {
         ...item,
-        x: Math.max(0, Math.min(92, (node.position.x / canvasSize.width) * 100)),
-        y: Math.max(0, Math.min(92, (node.position.y / canvasSize.height) * 100)),
+        x: Math.max(0, Math.min(89, (node.position.x / canvasSize.width) * 100)),
+        y: Math.max(0, Math.min(93, (node.position.y / canvasSize.height) * 100)),
       } : item),
     }));
   }, [canvasSize, slide.id]);
@@ -483,7 +498,14 @@ function App() {
       setNotice(`This object already has a ${instructionTypes[sourceNode.nodeKind].label} instruction`);
       return;
     }
-    const edge = { id: id(), source: connection.source, target, type: "smoothstep" };
+    const edge = {
+      id: id(),
+      source: connection.source,
+      sourceHandle: connection.sourceHandle,
+      target,
+      targetHandle: connection.targetHandle,
+      type: "smoothstep",
+    };
     updateCurrentSlide((current) => ({
       ...current,
       edges: [...current.edges, edge],
@@ -507,124 +529,205 @@ function App() {
   const onFlowReconnect = useCallback((oldEdge, connection) => {
     if (!connection.source || !connection.target?.startsWith("target:")) return;
     const target = connection.target.replace("target:", "");
+    const sourceNode = slide.instructionNodes.find((node) => node.id === connection.source);
+    const duplicateType = slide.edges.some((edge) => {
+      if (edge.id === oldEdge.id) return false;
+      const node = slide.instructionNodes.find((item) => item.id === edge.source);
+      return edge.target === target && node?.nodeKind === sourceNode?.nodeKind;
+    });
+    if (duplicateType) {
+      setNotice("This object already has a writing direction");
+      return;
+    }
     setFlowEdges((edges) => reconnectEdge(oldEdge, connection, edges));
     updateCurrentSlide((current) => ({
       ...current,
       edges: current.edges.map((edge) => edge.id === oldEdge.id ? {
         ...edge,
         source: connection.source,
+        sourceHandle: connection.sourceHandle,
         target,
+        targetHandle: connection.targetHandle,
       } : edge),
     }));
-  }, [slide.id]);
+  }, [slide.id, slide.edges, slide.instructionNodes]);
 
   const updateInstruction = (patch) => {
     updateCurrentSlide((current) => ({
       ...current,
       instructionNodes: current.instructionNodes.map((node) => node.id === selectedId ? { ...node, ...patch } : node),
-      elements: current.instructionNodes.find((node) => node.id === selectedId)?.nodeKind === "fontSize" && patch.value
-        ? current.elements.map((element) => current.edges.some((edge) => edge.source === selectedId && edge.target === element.id)
-          ? { ...element, fontSize: Number.parseInt(patch.value, 10) || element.fontSize }
-          : element)
-        : current.elements,
     }));
   };
 
-  const applyAiContent = (content) => {
-    const generatedText = [content.eyebrow, content.title, ...content.points.map((point) => `•  ${point}`), content.footer].filter(Boolean);
-    if (slide.elements.length) {
-      updateCurrentSlide((current) => ({
-        ...current,
-        elements: current.elements.map((element, index) => ({
-          ...element,
-          text: generatedText[index] || element.text,
-        })),
-      }));
-    } else {
-      const elements = [
-        newText(project.defaults, { text: content.eyebrow, x: 7, y: 8, w: 28, h: 6, fontSize: 14, color: "#1687c8", bold: true }),
-        newText(project.defaults, { text: content.title, x: 7, y: 17, w: 70, h: 15, fontSize: 30, bold: true }),
-        ...content.points.map((point, index) => newText(project.defaults, { text: `•  ${point}`, x: 9, y: 40 + index * 12, w: 68, h: 9, fontSize: 18 })),
-      ];
-      if (content.footer) elements.push(newText(project.defaults, { text: content.footer, x: 7, y: 89, w: 76, h: 5, fontSize: 9, color: "#6b7075" }));
-      updateCurrentSlide((current) => ({ ...current, elements }));
-    }
-    setSelectedId(null);
+  const requestObjectAlternatives = async (sourceSlide, element) => {
+    const linkedEdges = sourceSlide.edges.filter((edge) => edge.target === element.id);
+    const linkedNodeIds = new Set(linkedEdges.map((edge) => edge.source));
+    const linkedNodes = sourceSlide.instructionNodes.filter((node) => linkedNodeIds.has(node.id));
+    if (!linkedNodes.length) return null;
+    const response = await fetch("/api/refine-object", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        apiKey: settings.apiKey,
+        model: settings.model,
+        element,
+        instructionNodes: linkedNodes,
+        edges: linkedEdges,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error);
+    return payload.alternatives;
   };
 
-  const refine = async () => {
+  const generateSelected = async (element = selected) => {
+    if (!element || element.type !== "text") return;
     setBusy(true);
-    setNotice("OpenAI is refining this slide...");
+    setGeneratingIds([element.id]);
+    setNotice("Generating this object...");
     try {
-      const response = await fetch("/api/refine", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          apiKey: settings.apiKey,
-          model: settings.model,
-          context: project.context,
-          aiConfig: project.aiConfig,
-          feedback,
-          elements: slide.elements,
-          instructionNodes: slide.instructionNodes,
-          edges: slide.edges,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error);
-      applyAiContent(payload.content);
-      setFeedback("");
-      setRefineOpen(false);
-      setNotice("AI draft applied to the current slide");
-    } catch (error) {
-      setNotice(error.message || "AI refinement failed");
-      if (!settings.apiKey) {
-        setRefineOpen(false);
-        setSettingsOpen(true);
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const generateSelected = async () => {
-    if (!selected) return;
-    setBusy(true);
-    setNotice("Generating alternatives for the selected object...");
-    try {
-      const response = await fetch("/api/refine-object", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          apiKey: settings.apiKey,
-          model: settings.model,
-          context: project.context,
-          aiConfig: project.aiConfig,
-          feedback,
-          element: selected,
-          instructionNodes: slide.instructionNodes,
-          edges: slide.edges.filter((edge) => edge.target === selected.id),
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error);
-      setSampleReview({ elementId: selected.id, alternatives: payload.alternatives });
-      setNotice("Choose an alternative to apply");
+      const alternatives = await requestObjectAlternatives(slide, element);
+      if (!alternatives) throw new Error("Connect a writing direction node to this object first.");
+      setSampleReview({ slideId: slide.id, elementId: element.id, alternatives });
+      setNotice("Choose a version");
     } catch (error) {
       setNotice(error.message || "Could not generate alternatives");
       if (!settings.apiKey) setSettingsOpen(true);
     } finally {
       setBusy(false);
+      setGeneratingIds([]);
+    }
+  };
+
+  const generateScope = async (scope, requestedSlide = slide) => {
+    const sourceSlides = scope === "deck" ? project.slides.filter((item) => !item.hidden) : [requestedSlide];
+    const tasks = sourceSlides.flatMap((sourceSlide) => sourceSlide.elements
+      .filter((element) => element.type === "text" && sourceSlide.edges.some((edge) => edge.target === element.id))
+      .map((element) => ({ sourceSlide, element })));
+    if (!tasks.length) {
+      setNotice("Connect writing direction nodes to text objects first.");
+      return;
+    }
+    setBusy(true);
+    setGeneratingIds(tasks.map(({ element }) => element.id));
+    setNotice(scope === "deck" ? "Generating the entire deck..." : "Generating this slide...");
+    const updates = new Map();
+    try {
+      for (const { sourceSlide, element } of tasks) {
+        const alternatives = await requestObjectAlternatives(sourceSlide, element);
+        if (alternatives?.[0]) updates.set(`${sourceSlide.id}:${element.id}`, alternatives[0]);
+      }
+      commit((current) => ({
+        ...current,
+        slides: current.slides.map((item) => ({
+          ...item,
+          elements: item.elements.map((element) => {
+            const text = updates.get(`${item.id}:${element.id}`);
+            return text ? { ...element, text } : element;
+          }),
+        })),
+      }));
+      setNotice(scope === "deck" ? "Entire deck generated" : "Slide generated");
+    } catch (error) {
+      setNotice(error.message || "AI generation failed");
+      if (!settings.apiKey) setSettingsOpen(true);
+    } finally {
+      setBusy(false);
+      setGeneratingIds([]);
     }
   };
 
   const applySample = (text) => {
-    const elementId = sampleReview.elementId;
-    updateCurrentSlide((current) => ({
+    updateSlide(sampleReview.slideId, (current) => ({
       ...current,
-      elements: current.elements.map((element) => element.id === elementId ? { ...element, text } : element),
+      elements: current.elements.map((element) => element.id === sampleReview.elementId ? { ...element, text } : element),
     }));
     setSampleReview(null);
+  };
+
+  const writeProjectFile = async (handle) => {
+    const writable = await handle.createWritable();
+    await writable.write(JSON.stringify(project, null, 2));
+    await writable.close();
+    fileHandleRef.current = handle;
+    setNotice("Project file saved");
+  };
+
+  const saveProjectAs = async () => {
+    try {
+      if (window.showSaveFilePicker) {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: `${project.name || "Vibe Deck"}.vibedeck`,
+          types: [{ description: "Vibe Deck project", accept: { "application/json": [".vibedeck"] } }],
+        });
+        await writeProjectFile(handle);
+        return;
+      }
+      const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${project.name || "Vibe Deck"}.vibedeck`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setNotice("Project file downloaded");
+    } catch (error) {
+      if (error.name !== "AbortError") setNotice("Could not save project file");
+    }
+  };
+
+  const saveProject = async () => {
+    if (fileHandleRef.current) {
+      try {
+        await writeProjectFile(fileHandleRef.current);
+      } catch {
+        await saveProjectAs();
+      }
+    } else {
+      await saveProjectAs();
+    }
+  };
+
+  const loadProjectFile = async (file) => {
+    try {
+      const next = normalizeProject(JSON.parse(await file.text()));
+      setProject(next);
+      setCurrentSlideId(next.slides[0].id);
+      setSelectedId(null);
+      setHistory([]);
+      setFuture([]);
+      setNotice("Project opened");
+    } catch {
+      setNotice("This is not a valid Vibe Deck project");
+    }
+  };
+
+  const openProject = async () => {
+    try {
+      if (window.showOpenFilePicker) {
+        const [handle] = await window.showOpenFilePicker({
+          multiple: false,
+          types: [{ description: "Vibe Deck project", accept: { "application/json": [".vibedeck", ".json"] } }],
+        });
+        fileHandleRef.current = handle;
+        await loadProjectFile(await handle.getFile());
+      } else {
+        fileInputRef.current?.click();
+      }
+    } catch (error) {
+      if (error.name !== "AbortError") setNotice("Could not open project file");
+    }
+  };
+
+  const newProject = () => {
+    const next = { ...clone(initialProject), slides: [blankSlide()] };
+    fileHandleRef.current = null;
+    setProject(next);
+    setCurrentSlideId(next.slides[0].id);
+    setSelectedId(null);
+    setHistory([]);
+    setFuture([]);
+    setNotice("New project");
   };
 
   const exportPptx = async () => {
@@ -653,75 +756,86 @@ function App() {
   };
 
   const canvasStyle = useMemo(() => ({ aspectRatio: aspectRatios[project.aspect], background: slide.background }), [project.aspect, slide.background]);
+  const workspaceColumns = slidesCollapsed
+    ? `44px minmax(480px, 1fr) 6px ${rightWidth}px`
+    : `${leftWidth}px 6px minmax(480px, 1fr) 6px ${rightWidth}px`;
 
   return (
     <div className="app" onPointerMove={onPointerMove} onPointerUp={onPointerUp} onClick={() => setContextMenu(null)}>
+      <input ref={fileInputRef} className="hidden-file-input" type="file" accept=".vibedeck,.json,application/json" onChange={(event) => event.target.files?.[0] && loadProjectFile(event.target.files[0])} />
       <header className="topbar">
         <div className="brand">
           <div className="mark">V</div>
           <input value={project.name} onChange={(event) => commit((current) => ({ ...current, name: event.target.value }))} aria-label="Project name" />
           <span className="mvp">MVP</span>
+          <button type="button" className="icon-button" onClick={newProject} title="New project">{icon("add")}</button>
+          <button type="button" className="icon-button" onClick={openProject} title="Open project">{icon("folder")}</button>
+          <button type="button" className="icon-button" onClick={saveProject} title="Save project">{icon("save")}</button>
         </div>
         <div className="toolbar">
           <button type="button" className="icon-button" onClick={undo} disabled={!history.length} title="Undo">{icon("undo")}</button>
           <button type="button" className="icon-button" onClick={redo} disabled={!future.length} title="Redo">{icon("redo")}</button>
           <span className="save-state">{notice}</span>
-          <button type="button" onClick={() => { setSettingsTab("ai"); setSettingsOpen(true); }}>{icon("settings")} AI Instructions</button>
+          <button type="button" onClick={() => setSettingsOpen(true)}>{icon("settings")} OpenAI</button>
           <button type="button" className="primary" onClick={exportPptx} disabled={busy}>{icon("download")} Export PPTX</button>
+          <button type="button" className="deck-generate" onClick={() => generateScope("deck")} disabled={busy}>{icon("spark")} AI GEN ENTIRE DECK</button>
         </div>
       </header>
 
-      <main className="workspace" style={{ gridTemplateColumns: `${leftWidth}px 6px minmax(480px, 1fr) 6px ${rightWidth}px` }}>
-        <aside className="slides-panel panel">
+      <main className={`workspace ${slidesCollapsed ? "slides-collapsed" : ""}`} style={{ gridTemplateColumns: workspaceColumns }}>
+        <aside className={`slides-panel panel ${slidesCollapsed ? "collapsed" : ""}`}>
           <div className="slides-header">
-            <div><strong>Slides</strong><span>{project.slides.length}</span></div>
-            <button type="button" onClick={addSlide} title="Add slide after current">{icon("add")}</button>
+            {!slidesCollapsed && <div><strong>Slides</strong><span>{project.slides.length}</span></div>}
+            <span className="slides-header-actions">
+              {!slidesCollapsed && <button type="button" onClick={addSlide} title="Add slide after current">{icon("add")}</button>}
+              <button type="button" onClick={() => setSlidesCollapsed((value) => !value)} title={slidesCollapsed ? "Show slides" : "Hide slides"}>{icon("panel")}</button>
+            </span>
           </div>
-          <div className="slide-list">
+          {!slidesCollapsed && <div className="slide-list">
+            <SlideDropZone active={dropIndex === 0} onDragOver={() => setDropIndex(0)} onDrop={(draggedId) => reorderSlide(draggedId || draggedSlideId, 0)} />
             {project.slides.map((item, index) => (
-              <SlideThumbnail
-                key={item.id}
-                slide={item}
-                index={index}
-                aspect={project.aspect}
-                active={item.id === slide.id}
-                onSelect={() => { setCurrentSlideId(item.id); setSelectedId(null); setEditingId(null); }}
-                onRefine={() => { setCurrentSlideId(item.id); setRefineOpen(true); }}
-                onContext={(event) => { event.preventDefault(); event.stopPropagation(); setContextMenu({ kind: "slide", id: item.id, x: event.clientX, y: event.clientY }); }}
-                onDrop={(draggedId) => reorderSlide(draggedId, item.id)}
-              />
+              <div key={item.id}>
+                <SlideThumbnail
+                  slide={item}
+                  index={index}
+                  aspect={project.aspect}
+                  active={item.id === slide.id}
+                  dragging={item.id === draggedSlideId}
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/slide-id", item.id);
+                    setDraggedSlideId(item.id);
+                  }}
+                  onDragEnd={() => { setDraggedSlideId(null); setDropIndex(null); }}
+                  onSelect={() => { setCurrentSlideId(item.id); setSelectedId(null); setEditingId(null); }}
+                  onGenerate={() => { setCurrentSlideId(item.id); generateScope("slide", item); }}
+                  onContext={(event) => { event.preventDefault(); event.stopPropagation(); setContextMenu({ kind: "slide", id: item.id, x: event.clientX, y: event.clientY }); }}
+                />
+                <SlideDropZone active={dropIndex === index + 1} onDragOver={() => setDropIndex(index + 1)} onDrop={(draggedId) => reorderSlide(draggedId || draggedSlideId, index + 1)} />
+              </div>
             ))}
-          </div>
+          </div>}
         </aside>
 
-        <div className="split-handle" onPointerDown={(event) => startSplit(event, "left")} />
+        {!slidesCollapsed && <div className="split-handle" onPointerDown={(event) => startSplit(event, "left")} />}
 
         <section className="stage">
           <div className="canvas-toolbar">
             <button type="button" onClick={() => addElement(newText(project.defaults))}>{icon("add")} Text box</button>
             <button type="button" onClick={() => addElement(newShape(project.defaults))}>{icon("box")} Shape</button>
-            <div className={`node-picker ${nodeMenuOpen ? "open" : ""}`}>
-              <button type="button" onClick={() => setNodeMenuOpen((open) => !open)}>{icon("node")} Node {icon("chevron")}</button>
-              <div className="node-menu">
-                {Object.entries(instructionTypes).map(([kind, definition]) => (
-                  <button type="button" key={kind} onClick={() => { addInstructionNode(newNode(kind)); setNodeMenuOpen(false); }}>
-                    <i style={{ background: definition.color }} />
-                    <span><strong>{definition.label}</strong><small>{definition.hint}</small></span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <span className="canvas-hint">Drag from a node handle to an object handle</span>
-            <button type="button" className="refine-page" onClick={() => setRefineOpen(true)}>{icon("spark")} Refine Page</button>
+            <button type="button" onClick={() => addInstructionNode(newNode("vibe"))}>{icon("node")} Direction Node</button>
+            <span className="canvas-hint">Drag from a node handle to any side of a text box</span>
+            <button type="button" className="refine-page" onClick={() => generateScope("slide")} disabled={busy}>{icon("spark")} AI Gen Slide</button>
           </div>
           <div className="canvas-shell">
-            <div
-              className="slide-canvas"
-              ref={canvasRef}
-              style={canvasStyle}
-              onPointerDown={() => { setSelectedId(null); setEditingId(null); }}
-              onContextMenu={(event) => event.preventDefault()}
-            >
+            <div className="canvas-zoom" style={{ transform: `scale(${zoom})` }}>
+              <div
+                className="slide-canvas"
+                ref={canvasRef}
+                style={canvasStyle}
+                onPointerDown={() => { setSelectedId(null); setEditingId(null); }}
+                onContextMenu={(event) => event.preventDefault()}
+              >
               <div className="flow-overlay">
                 <ReactFlow
                   nodes={flowNodes}
@@ -736,6 +850,7 @@ function App() {
                   onEdgeClick={(_event, edge) => setSelectedId(edge.id)}
                   nodesConnectable
                   edgesReconnectable
+                  nodeExtent={[[0, 0], [canvasSize.width, canvasSize.height]]}
                   deleteKeyCode={["Backspace", "Delete"]}
                   panOnDrag={false}
                   zoomOnScroll={false}
@@ -748,7 +863,6 @@ function App() {
                   proOptions={{ hideAttribution: true }}
                 >
                   <Background color="#dce1e5" gap={20} size={0.6} />
-                  <Controls showInteractive={false} />
                 </ReactFlow>
               </div>
               {!slide.elements.length && (
@@ -767,12 +881,22 @@ function App() {
                   onPointerDown={onElementPointerDown}
                   onDoubleClick={() => element.type !== "node" && setEditingId(element.id)}
                   onChange={(patch) => { setSelectedId(element.id); updateSelected(patch); }}
+                  onGenerate={() => generateSelected(element)}
+                  generating={generatingIds.includes(element.id)}
                   onContext={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedId(element.id); setContextMenu({ kind: "element", id: element.id, x: event.clientX, y: event.clientY }); }}
                 />
               ))}
+              </div>
             </div>
           </div>
-          <div className="zoom-label">Slide {project.slides.findIndex((item) => item.id === slide.id) + 1} · {project.aspect === "wide" ? "16:9" : project.aspect === "standard" ? "4:3" : "3:4"}</div>
+          <div className="zoom-label">
+            <span>Slide {project.slides.findIndex((item) => item.id === slide.id) + 1} · {project.aspect === "wide" ? "16:9" : project.aspect === "standard" ? "4:3" : "3:4"}</span>
+            <span className="zoom-controls">
+              <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => setZoom((value) => Math.max(.5, value - .1))}>{icon("zoomOut")}</button>
+              <b>{Math.round(zoom * 100)}%</b>
+              <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => setZoom((value) => Math.min(2, value + .1))}>{icon("zoomIn")}</button>
+            </span>
+          </div>
         </section>
 
         <div className="split-handle" onPointerDown={(event) => startSplit(event, "right")} />
@@ -785,7 +909,7 @@ function App() {
               update={selectedInstruction ? updateInstruction : updateSelected}
               onDelete={() => removeElement(selectedId)}
               onGenerate={selected ? generateSelected : undefined}
-              busy={busy}
+              busy={selected ? generatingIds.includes(selected.id) : false}
             />
           ) : (
             <>
@@ -795,22 +919,16 @@ function App() {
               </div>
               {panel === "context" ? (
                 <div className="panel-content">
-                  <Field label="Who I am" value={project.context.whoAmI} onChange={(value) => updateContext("whoAmI", value)} placeholder="Company, role, point of view" />
-                  <Field label="Target audience" value={project.context.audience} onChange={(value) => updateContext("audience", value)} placeholder="Who will see this deck?" />
-                  <Field label="Purpose of deck" value={project.context.purpose} onChange={(value) => updateContext("purpose", value)} placeholder="What should this deck achieve?" area />
-                  <Field label="Key facts / stacks" value={project.context.keyStacks} onChange={(value) => updateContext("keyStacks", value)} placeholder="Facts, products, technology, constraints" area />
-                  <Field label="Vibe" value={project.context.vibe} onChange={(value) => updateContext("vibe", value)} placeholder="Editorial, bold, minimal, premium..." area />
-                  <div className="two-column">
-                    <Select label="Tone" value={project.context.tone} onChange={(value) => updateContext("tone", value)} options={["Confident", "Visionary", "Analytical", "Friendly", "Urgent"]} />
-                    <Select label="Content size" value={project.context.contentSize} onChange={(value) => updateContext("contentSize", value)} options={["Short", "Medium", "Detailed"]} />
-                  </div>
-                  <Field label="Talking points" value={project.context.talkingPoints} onChange={(value) => updateContext("talkingPoints", value)} placeholder="One point per line" area />
+                  <CollapsibleField label="Who I am" value={project.context.whoAmI} onChange={(value) => updateContext("whoAmI", value)} placeholder="Company, role, point of view" />
+                  <CollapsibleField label="Target audience" value={project.context.audience} onChange={(value) => updateContext("audience", value)} placeholder="Who will see this deck?" />
+                  <CollapsibleField label="Purpose of deck" value={project.context.purpose} onChange={(value) => updateContext("purpose", value)} placeholder="What should this deck achieve?" area />
+                  <CollapsibleField label="Key facts / stacks" value={project.context.keyStacks} onChange={(value) => updateContext("keyStacks", value)} placeholder="Facts, products, technology, constraints" area />
+                  <CollapsibleField label="Vibe" value={project.context.vibe} onChange={(value) => updateContext("vibe", value)} placeholder="Editorial, bold, minimal, premium..." area />
                 </div>
               ) : (
                 <div className="panel-content">
                   <Select label="Aspect ratio" value={project.aspect} onChange={(value) => commit((current) => ({ ...current, aspect: value }))} options={[["wide", "16:9 Widescreen"], ["standard", "4:3 Standard"], ["portrait", "3:4 Portrait"]]} />
-                  <ColorField label="Slide background" value={slide.background} onChange={(value) => updateCurrentSlide({ background: value })} />
-                  <Field label="Slide name" value={slide.name} onChange={(value) => updateCurrentSlide({ name: value })} />
+                  <ColorPicker label="Slide background" value={slide.background} onChange={(value) => updateCurrentSlide({ background: value })} />
                   <Select label="Default font" value={project.defaults.fontFamily} onChange={(value) => commit((current) => ({ ...current, defaults: { ...current.defaults, fontFamily: value } }))} options={["Aptos", "Arial", "Helvetica Neue", "Georgia", "Times New Roman", "Courier New"]} />
                   <RangeField label="Default text size" value={project.defaults.fontSize} min="8" max="72" onChange={(value) => commit((current) => ({ ...current, defaults: { ...current.defaults, fontSize: Number(value) } }))} />
                 </div>
@@ -834,14 +952,6 @@ function App() {
         </div>
       )}
 
-      {refineOpen && (
-        <Modal title="Refine current page" onClose={() => setRefineOpen(false)}>
-          <p className="modal-copy">AI will use the deck context, the text on this slide, and every connected node as direction.</p>
-          <Field label="Your feedback" value={feedback} onChange={setFeedback} placeholder="Make the message shorter, more strategic, and more confident..." area />
-          <button type="button" className="primary full" onClick={refine} disabled={busy}>{icon("spark")} {busy ? "Refining..." : "Refine Page"}</button>
-        </Modal>
-      )}
-
       {sampleReview && (
         <Modal title="Choose a content version" wide onClose={() => setSampleReview(null)}>
           <p className="modal-copy">Preview the alternatives generated from the nodes connected to this object.</p>
@@ -859,37 +969,12 @@ function App() {
       )}
 
       {settingsOpen && (
-        <Modal title="AI Instructions" wide onClose={() => setSettingsOpen(false)}>
-          <div className="settings-tabs">
-            <button type="button" className={settingsTab === "ai" ? "active" : ""} onClick={() => setSettingsTab("ai")}>Behavior</button>
-            <button type="button" className={settingsTab === "connection" ? "active" : ""} onClick={() => setSettingsTab("connection")}>Connection</button>
+        <Modal title="OpenAI Connection" onClose={() => setSettingsOpen(false)}>
+          <div className="connection-settings">
+            <Field label="OpenAI API key" type="password" value={settings.apiKey} onChange={(value) => setSettings((current) => ({ ...current, apiKey: value }))} placeholder="sk-..." />
+            <Field label="Model" value={settings.model} onChange={(value) => setSettings((current) => ({ ...current, model: value }))} placeholder="gpt-5.5" />
+            <p className="security-note">AI uses only the writing-direction node connected to each text object.</p>
           </div>
-          {settingsTab === "ai" ? (
-            <div className="ai-config-grid">
-              <section className="config-form">
-                <div className="config-intro">
-                  <strong>Project AI rules</strong>
-                  <span>These settings apply to every Refine Page action in this deck.</span>
-                </div>
-                <div className="two-column">
-                  <Select label="Output language" value={project.aiConfig.language} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, language: value } }))} options={["Match source", "English", "Traditional Chinese", "Simplified Chinese", "Japanese"]} />
-                  <Select label="Factuality" value={project.aiConfig.factuality} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, factuality: value } }))} options={["Strict", "Balanced", "Creative"]} />
-                </div>
-                <RangeField label="Alternatives considered" value={project.aiConfig.defaultSamples} min="1" max="5" onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, defaultSamples: Number(value) } }))} />
-                <Toggle label="Preserve original meaning" description="Improve wording without changing the core claim." checked={project.aiConfig.preserveMeaning} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, preserveMeaning: value } }))} />
-                <Toggle label="Do not invent facts" description="Never add unsupported numbers, sources, customers, or claims." checked={project.aiConfig.noInventedFacts} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, noInventedFacts: value } }))} />
-                <Toggle label="Respect node scope" description="Apply node directions only to their connected objects." checked={project.aiConfig.respectNodeScope} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, respectNodeScope: value } }))} />
-                <Field label="Advanced instructions" value={project.aiConfig.advancedInstructions} onChange={(value) => commit((current) => ({ ...current, aiConfig: { ...current.aiConfig, advancedInstructions: value } }))} placeholder="Example: Lead with a claim. Avoid consulting jargon. Keep product names unchanged." area />
-              </section>
-              <InstructionHierarchy />
-            </div>
-          ) : (
-            <div className="connection-settings">
-              <Field label="OpenAI API key" type="password" value={settings.apiKey} onChange={(value) => setSettings((current) => ({ ...current, apiKey: value }))} placeholder="sk-..." />
-              <Field label="Model" value={settings.model} onChange={(value) => setSettings((current) => ({ ...current, model: value }))} placeholder="gpt-5.5" />
-              <p className="security-note">The key stays in this browser and is sent through your local server only when you refine a page.</p>
-            </div>
-          )}
           <button type="button" className="primary full" onClick={() => setSettingsOpen(false)}>Save settings</button>
         </Modal>
       )}
@@ -902,9 +987,7 @@ function InstructionFlowNode({ data, selected }) {
   return (
     <div className={`flow-instruction-node ${selected ? "selected" : ""}`} style={{ "--node-color": definition.color }}>
       <small>{definition.hint}</small>
-      <strong>{definition.label}</strong>
-      <span>{data.value}</span>
-      <em>{data.connectionCount} linked</em>
+      <span title={data.value}>{data.value}</span>
       <Handle type="source" position={Position.Right} id="instruction" className="flow-source-handle" />
     </div>
   );
@@ -913,7 +996,10 @@ function InstructionFlowNode({ data, selected }) {
 function ObjectTargetNode() {
   return (
     <div className="flow-object-target">
-      <Handle type="target" position={Position.Left} id="ai-direction" className="flow-target-handle" />
+      <Handle type="target" position={Position.Top} id="top" className="flow-target-handle" />
+      <Handle type="target" position={Position.Right} id="right" className="flow-target-handle" />
+      <Handle type="target" position={Position.Bottom} id="bottom" className="flow-target-handle" />
+      <Handle type="target" position={Position.Left} id="left" className="flow-target-handle" />
     </div>
   );
 }
@@ -923,7 +1009,7 @@ const flowNodeTypes = {
   objectTarget: ObjectTargetNode,
 };
 
-function SlideElement({ element, assignedInstructions, selected, editing, onPointerDown, onDoubleClick, onChange, onContext }) {
+function SlideElement({ element, assignedInstructions, selected, editing, onPointerDown, onDoubleClick, onChange, onGenerate, generating, onContext }) {
   const position = { left: `${element.x}%`, top: `${element.y}%`, width: `${element.w}%`, height: `${element.h}%`, zIndex: selected ? 6 : element.type === "node" ? 4 : 2 };
   const shapeStyle = element.type === "shape" ? {
     background: element.fill,
@@ -932,17 +1018,22 @@ function SlideElement({ element, assignedInstructions, selected, editing, onPoin
   } : {};
   return (
     <div className={`slide-element content-object ${element.type} ${selected ? "selected" : ""} ${editing ? "editing" : ""}`} style={{ ...position, ...shapeStyle }} onPointerDown={(event) => onPointerDown(event, element)} onDoubleClick={(event) => { event.stopPropagation(); onDoubleClick(); }} onContextMenu={onContext}>
-      <textarea
-        value={element.text}
-        readOnly={!editing}
-        autoFocus={editing}
-        onChange={(event) => onChange({ text: event.target.value })}
-        onBlur={() => {}}
-        onPointerDown={(event) => {
-          if (editing) event.stopPropagation();
-        }}
-        style={{ fontFamily: element.fontFamily, fontSize: `${Math.max(8, element.fontSize * 0.72)}px`, color: element.color, fontWeight: element.bold ? 700 : 400, fontStyle: element.italic ? "italic" : "normal", textAlign: element.align }}
-      />
+      {element.type === "text" && <textarea
+          value={element.text}
+          readOnly={!editing}
+          autoFocus={editing}
+          onChange={(event) => onChange({ text: event.target.value })}
+          onBlur={() => {}}
+          onPointerDown={(event) => {
+            if (editing) event.stopPropagation();
+          }}
+          style={{ fontFamily: element.fontFamily, fontSize: `${Math.max(8, element.fontSize * 0.72)}px`, color: element.color, fontWeight: element.bold ? 700 : 400, fontStyle: element.italic ? "italic" : "normal", textAlign: element.align }}
+        />}
+      {element.type === "text" && (
+        <button type="button" className={`object-ai ${generating ? "generating" : ""}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onGenerate(); }} title="AI Gen this object" disabled={generating}>
+          {icon(generating ? "clock" : "spark")}
+        </button>
+      )}
       {assignedInstructions.length > 0 && (
         <div className="attribute-chips">
           {assignedInstructions.map((node) => (
@@ -957,9 +1048,9 @@ function SlideElement({ element, assignedInstructions, selected, editing, onPoin
   );
 }
 
-function SlideThumbnail({ slide, index, aspect, active, onSelect, onRefine, onContext, onDrop }) {
+function SlideThumbnail({ slide, index, aspect, active, dragging, onSelect, onGenerate, onContext, onDragStart, onDragEnd }) {
   return (
-    <div className={`slide-row ${active ? "active" : ""} ${slide.hidden ? "hidden-slide" : ""}`} draggable onDragStart={(event) => event.dataTransfer.setData("text/slide-id", slide.id)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); onDrop(event.dataTransfer.getData("text/slide-id")); }} onContextMenu={onContext}>
+    <div className={`slide-row ${active ? "active" : ""} ${slide.hidden ? "hidden-slide" : ""} ${dragging ? "dragging" : ""}`} draggable onDragStart={onDragStart} onDragEnd={onDragEnd} onContextMenu={onContext}>
       <span className="slide-number">{index + 1}</span>
       <div className="thumb-stack">
         <button type="button" className="thumbnail" style={{ aspectRatio: aspectRatios[aspect], background: slide.background }} onClick={onSelect}>
@@ -968,12 +1059,21 @@ function SlideThumbnail({ slide, index, aspect, active, onSelect, onRefine, onCo
               {element.text}
             </span>
           ))}
+          {slide.instructionNodes.map((node) => (
+            <span key={node.id} className="thumb-node" style={{ left: `${node.x}%`, top: `${node.y}%`, background: instructionTypes[node.nodeKind]?.color }}>
+              {node.value}
+            </span>
+          ))}
           {slide.hidden && <span className="hidden-badge">{icon("eyeOff")}</span>}
         </button>
-        <div className="slide-meta"><span>{slide.name}</span><button type="button" onClick={onRefine}>{icon("spark")} Refine</button></div>
+        <div className="slide-meta"><span>Slide {index + 1}</span><button type="button" onClick={onGenerate}>{icon("spark")} AI Gen</button></div>
       </div>
     </div>
   );
+}
+
+function SlideDropZone({ active, onDragOver, onDrop }) {
+  return <div className={`slide-drop-zone ${active ? "active" : ""}`} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; onDragOver(); }} onDrop={(event) => { event.preventDefault(); onDrop(event.dataTransfer.getData("text/slide-id")); }} />;
 }
 
 function Inspector({ element, isInstruction, update, onDelete, onGenerate, busy }) {
@@ -984,8 +1084,6 @@ function Inspector({ element, isInstruction, update, onDelete, onGenerate, busy 
         <div className="inspector-title"><div><i style={{ background: definition.color }} /><strong>{definition.label}</strong></div><span>Node</span></div>
         <div className="panel-content">
           <Field label="Direction" value={element.value} onChange={(value) => update({ value })} area={element.nodeKind === "vibe"} />
-          <div className="node-help">Drag the colored handle on the node to one or more object handles. Select an arrow and press Delete to disconnect it.</div>
-          <PositionGrid element={element} update={update} />
           <button type="button" className="delete-control" onClick={onDelete}>{icon("trash")} Delete node</button>
         </div>
       </>
@@ -995,53 +1093,22 @@ function Inspector({ element, isInstruction, update, onDelete, onGenerate, busy 
     <>
       <div className="inspector-title"><strong>{element.type === "text" ? "Text box" : "Shape"}</strong><span>Selected</span></div>
       <div className="panel-content">
-        <Field label="Content" value={element.text} onChange={(value) => update({ text: value })} area />
-        <button type="button" className="generate-control" onClick={onGenerate} disabled={busy}>{icon("spark")} {busy ? "Generating..." : "Generate Selected"}</button>
-        <Select label="Font" value={element.fontFamily} onChange={(value) => update({ fontFamily: value })} options={["Aptos", "Arial", "Helvetica Neue", "Georgia", "Times New Roman", "Courier New"]} />
-        <RangeField label="Font size" value={element.fontSize} min="8" max="72" onChange={(value) => update({ fontSize: Number(value) })} />
-        <ColorField label="Text color" value={element.color} onChange={(value) => update({ color: value })} />
-        <div className="format-row">
-          <button type="button" className={element.bold ? "active" : ""} onClick={() => update({ bold: !element.bold })}><b>B</b></button>
-          <button type="button" className={element.italic ? "active" : ""} onClick={() => update({ italic: !element.italic })}><i>I</i></button>
-          {["left", "center", "right"].map((align) => <button type="button" key={align} className={element.align === align ? "active" : ""} onClick={() => update({ align })}>{align[0].toUpperCase()}</button>)}
-        </div>
-        {element.type === "shape" && (
+        {element.type === "text" ? (
+          <>
+            <Field label="Content" value={element.text} onChange={(value) => update({ text: value })} area />
+            <button type="button" className="generate-control" onClick={onGenerate} disabled={busy}>{icon(busy ? "clock" : "spark")} {busy ? "Generating..." : "AI Gen"}</button>
+            <RangeField label="Font size" value={element.fontSize} min="8" max="72" onChange={(value) => update({ fontSize: Number(value) })} />
+          </>
+        ) : (
           <>
             <ColorField label="Fill color" value={element.fill} onChange={(value) => update({ fill: value })} />
             <ColorField label="Border color" value={element.borderColor} onChange={(value) => update({ borderColor: value })} />
             <RangeField label="Border width" value={element.borderWidth} min="0" max="8" onChange={(value) => update({ borderWidth: Number(value) })} />
           </>
         )}
-        <PositionGrid element={element} update={update} />
         <button type="button" className="delete-control" onClick={onDelete}>{icon("trash")} Delete object</button>
       </div>
     </>
-  );
-}
-
-function PositionGrid({ element, update }) {
-  return <div className="position-grid">{["x", "y", "w", "h"].map((key) => <label key={key}><span>{key.toUpperCase()}</span><input type="number" value={Math.round(element[key] * 10) / 10} onChange={(event) => update({ [key]: Number(event.target.value) })} /></label>)}</div>;
-}
-
-function InstructionHierarchy() {
-  const levels = [
-    ["1", "Safety rules", "Always enforced"],
-    ["2", "Project AI rules", "This settings screen"],
-    ["3", "Deck context", "Audience, purpose, tone"],
-    ["4", "Connected nodes", "Object-specific direction"],
-    ["5", "Latest feedback", "Current Refine Page request"],
-  ];
-  return (
-    <aside className="instruction-hierarchy">
-      <strong>Control priority</strong>
-      <p>When instructions conflict, the higher rule wins.</p>
-      {levels.map(([number, title, detail]) => (
-        <div className="hierarchy-level" key={number}>
-          <b>{number}</b>
-          <span><strong>{title}</strong><small>{detail}</small></span>
-        </div>
-      ))}
-    </aside>
   );
 }
 
@@ -1056,8 +1123,22 @@ function Modal({ title, wide, onClose, children }) {
   );
 }
 
+function CollapsibleField(props) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className={`collapsible-field ${open ? "open" : ""}`}>
+      <button type="button" onClick={() => setOpen((value) => !value)}>
+        <span>{props.label}</span>
+        <small>{props.value ? "Defined" : "Empty"}</small>
+        {icon("chevron")}
+      </button>
+      {open && <Field {...props} label="" />}
+    </section>
+  );
+}
+
 function Field({ label, value, onChange, placeholder, area, type = "text" }) {
-  return <label className="field"><span>{label}</span>{area ? <textarea value={value || ""} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /> : <input type={type} value={value || ""} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />}</label>;
+  return <label className="field">{label && <span>{label}</span>}{area ? <textarea value={value || ""} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /> : <input type={type} value={value || ""} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />}</label>;
 }
 
 function Select({ label, value, onChange, options }) {
@@ -1068,17 +1149,12 @@ function ColorField({ label, value, onChange }) {
   return <label className="field"><span>{label}</span><div className="color-field"><input type="color" value={value} onChange={(event) => onChange(event.target.value)} /><input value={value} onChange={(event) => onChange(event.target.value)} /></div></label>;
 }
 
-function RangeField({ label, value, min, max, onChange }) {
-  return <label className="field range-field"><span>{label}<b>{value}</b></span><input type="range" value={value} min={min} max={max} onChange={(event) => onChange(event.target.value)} /></label>;
+function ColorPicker({ label, value, onChange }) {
+  return <label className="field"><span>{label}</span><input className="color-picker-only" type="color" value={value} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
-function Toggle({ label, description, checked, onChange }) {
-  return (
-    <label className="toggle-row">
-      <span><strong>{label}</strong><small>{description}</small></span>
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
-    </label>
-  );
+function RangeField({ label, value, min, max, onChange }) {
+  return <label className="field range-field"><span>{label}<b>{value}</b></span><input type="range" value={value} min={min} max={max} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
 export default App;
