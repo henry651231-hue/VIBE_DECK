@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   applyEdgeChanges,
   applyNodeChanges,
-  Background,
   Handle,
   MarkerType,
   Position,
@@ -16,8 +15,13 @@ const SETTINGS_KEY = "vibe-deck-settings-v1";
 
 const aspectRatios = { wide: 16 / 9, standard: 4 / 3, portrait: 3 / 4 };
 const instructionTypes = {
+  wordCount: { label: "Content length", hint: "WORDS", color: "#7c5ce7", value: "80 words" },
   vibe: { label: "Writing direction", hint: "DIRECTION", color: "#e05d87", value: "Clear and visionary" },
+  fontSize: { label: "Font size", hint: "TYPE", color: "#ed8b32", value: "24 pt" },
+  samples: { label: "AI output options", hint: "OPTIONS", color: "#18a58b", value: "3 options" },
 };
+const NODE_WIDTH = 132;
+const NODE_HEIGHT = 57;
 
 function id() {
   return crypto.randomUUID();
@@ -42,6 +46,7 @@ const initialProject = {
     keyStacks: "",
     vibe: "",
   },
+  nodeLibrary: [],
   slides: [blankSlide()],
 };
 
@@ -52,6 +57,7 @@ function normalizeProject(saved) {
   if (Array.isArray(saved.slides) && saved.slides.length) {
     return {
       ...cleanSaved,
+      nodeLibrary: Array.isArray(saved.nodeLibrary) ? saved.nodeLibrary : [],
       slides: saved.slides.map(migrateSlideGraph),
     };
   }
@@ -70,7 +76,8 @@ function normalizeProject(saved) {
 function migrateSlideGraph(slide) {
   const legacyNodes = (slide.elements || []).filter((element) => element.type === "node");
   const instructionNodes = (slide.instructionNodes || legacyNodes.map(({ connections, ...node }) => node))
-    .filter((node) => node.nodeKind === "vibe");
+    .filter((node) => instructionTypes[node.nodeKind])
+    .map((node) => ({ ...node, w: node.w || 15, h: node.h || 10 }));
   const rawEdges = slide.edges || legacyNodes.flatMap((node) =>
     (node.connections || []).map((targetId) => ({
       id: id(),
@@ -88,7 +95,9 @@ function migrateSlideGraph(slide) {
     background: slide.background || "#ffffff",
     elements: (slide.elements || [])
       .filter((element) => element.type !== "node")
-      .map((element) => element.type === "shape" ? { ...element, text: "" } : element),
+      .map((element) => element.type === "shape"
+        ? { ...element, text: "" }
+        : { ...element, aiOutputs: element.aiOutputs || [], aiUnreviewed: Boolean(element.aiUnreviewed) }),
     instructionNodes,
     edges,
   };
@@ -110,6 +119,8 @@ function newText(defaults, overrides = {}) {
     italic: false,
     align: "left",
     connections: [],
+    aiOutputs: [],
+    aiUnreviewed: false,
     ...overrides,
   };
 }
@@ -124,16 +135,17 @@ function newShape(defaults) {
   };
 }
 
-function newNode(kind) {
-  const definition = instructionTypes[kind];
+function newNode(kind, reusableNode = null) {
+  const definition = reusableNode || instructionTypes[kind];
   return {
     id: id(),
     nodeKind: kind,
     value: definition.value,
+    libraryId: reusableNode?.id || null,
     x: 67,
     y: 62,
-    w: 11,
-    h: 7,
+    w: 15,
+    h: 10,
   };
 }
 
@@ -157,6 +169,8 @@ const icon = (name) => {
     zoomIn: "M11 8v6m-3-3h6m4 7-4-4M10.5 19a8.5 8.5 0 1 1 0-17 8.5 8.5 0 0 1 0 17Z",
     zoomOut: "M8 11h6m4 7-4-4M10.5 19a8.5 8.5 0 1 1 0-17 8.5 8.5 0 0 1 0 17Z",
     clock: "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
+    unread: "M18 8a6 6 0 1 1-2-4.5M18 2v6h-6",
+    grip: "M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01",
   };
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={paths[name]} /></svg>;
 };
@@ -185,8 +199,8 @@ function App() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [sampleReview, setSampleReview] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
+  const [nodeMenuOpen, setNodeMenuOpen] = useState(false);
   const [flowNodes, setFlowNodes] = useState([]);
   const [flowEdges, setFlowEdges] = useState([]);
   const [canvasSize, setCanvasSize] = useState({ width: 960, height: 540 });
@@ -199,8 +213,9 @@ function App() {
   const [dropIndex, setDropIndex] = useState(null);
   const canvasRef = useRef(null);
   const dragRef = useRef(null);
+  const slideDragRef = useRef(null);
+  const slideDropIndexRef = useRef(null);
   const splitRef = useRef(null);
-  const fileHandleRef = useRef(null);
   const fileInputRef = useRef(null);
 
   const slide = project.slides.find((item) => item.id === currentSlideId) || project.slides[0];
@@ -236,7 +251,9 @@ function App() {
       data: {
         nodeKind: node.nodeKind,
         value: node.value,
+        reusable: Boolean(node.libraryId),
       },
+      extent: [[0, 0], [Math.max(0, canvasSize.width - NODE_WIDTH), Math.max(0, canvasSize.height - NODE_HEIGHT)]],
     }));
     const targetNodes = slide.elements.filter((element) => element.type === "text").map((element) => ({
       id: `target:${element.id}`,
@@ -306,6 +323,18 @@ function App() {
     elements: current.elements.map((element) => element.id === selectedId ? { ...element, ...patch } : element),
   }), record);
 
+  const selectObject = (elementId) => {
+    setSelectedId(elementId);
+    setEditingId(null);
+    const element = slide.elements.find((item) => item.id === elementId);
+    if (element?.aiUnreviewed) {
+      updateCurrentSlide((current) => ({
+        ...current,
+        elements: current.elements.map((item) => item.id === elementId ? { ...item, aiUnreviewed: false } : item),
+      }), false);
+    }
+  };
+
   const addElement = (element) => {
     updateCurrentSlide((current) => ({ ...current, elements: [...current.elements, element] }));
     setSelectedId(element.id);
@@ -316,6 +345,11 @@ function App() {
     updateCurrentSlide((current) => ({ ...current, instructionNodes: [...current.instructionNodes, node] }));
     setSelectedId(node.id);
     setEditingId(null);
+  };
+
+  const addReusableNode = (libraryNode) => {
+    addInstructionNode(newNode(libraryNode.nodeKind, libraryNode));
+    setNodeMenuOpen(false);
   };
 
   const removeElement = (elementId) => {
@@ -417,7 +451,7 @@ function App() {
   const onElementPointerDown = (event, element, mode = "move") => {
     event.preventDefault();
     event.stopPropagation();
-    setSelectedId(element.id);
+    selectObject(element.id);
     if (editingId !== element.id) setEditingId(null);
     if (editingId === element.id) return;
     const rect = canvasRef.current.getBoundingClientRect();
@@ -434,6 +468,20 @@ function App() {
   };
 
   const onPointerMove = (event) => {
+    if (slideDragRef.current) {
+      const rows = [...document.querySelectorAll(".slide-row[data-slide-index]")];
+      let insertionIndex = rows.length;
+      for (const row of rows) {
+        const rect = row.getBoundingClientRect();
+        if (event.clientY < rect.top + rect.height / 2) {
+          insertionIndex = Number(row.dataset.slideIndex);
+          break;
+        }
+      }
+      slideDropIndexRef.current = insertionIndex;
+      setDropIndex(insertionIndex);
+      return;
+    }
     if (splitRef.current) {
       const { side, startX, initial } = splitRef.current;
       const delta = event.clientX - startX;
@@ -455,6 +503,13 @@ function App() {
   };
 
   const onPointerUp = () => {
+    if (slideDragRef.current) {
+      const draggedId = slideDragRef.current.id;
+      const insertionIndex = slideDropIndexRef.current;
+      slideDragRef.current = null;
+      slideDropIndexRef.current = null;
+      if (insertionIndex !== null) reorderSlide(draggedId, insertionIndex);
+    }
     if (dragRef.current) {
       const before = dragRef.current.before;
       setHistory((items) => [...items.slice(-49), before]);
@@ -462,6 +517,17 @@ function App() {
       dragRef.current = null;
     }
     splitRef.current = null;
+  };
+
+  const startSlideDrag = (event, slideId) => {
+    event.preventDefault();
+    event.stopPropagation();
+    slideDragRef.current = { id: slideId };
+    setDraggedSlideId(slideId);
+    const index = project.slides.findIndex((item) => item.id === slideId);
+    slideDropIndexRef.current = index;
+    setDropIndex(index);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
   const startSplit = (event, side) => {
@@ -475,12 +541,14 @@ function App() {
 
   const onFlowNodeDragStop = useCallback((_event, node) => {
     if (node.type !== "instruction") return;
+    const maxX = Math.max(0, canvasSize.width - (node.measured?.width || NODE_WIDTH));
+    const maxY = Math.max(0, canvasSize.height - (node.measured?.height || NODE_HEIGHT));
     updateCurrentSlide((current) => ({
       ...current,
       instructionNodes: current.instructionNodes.map((item) => item.id === node.id ? {
         ...item,
-        x: Math.max(0, Math.min(89, (node.position.x / canvasSize.width) * 100)),
-        y: Math.max(0, Math.min(93, (node.position.y / canvasSize.height) * 100)),
+        x: (Math.max(0, Math.min(maxX, node.position.x)) / canvasSize.width) * 100,
+        y: (Math.max(0, Math.min(maxY, node.position.y)) / canvasSize.height) * 100,
       } : item),
     }));
   }, [canvasSize, slide.id]);
@@ -553,10 +621,57 @@ function App() {
   }, [slide.id, slide.edges, slide.instructionNodes]);
 
   const updateInstruction = (patch) => {
+    const target = slide.instructionNodes.find((node) => node.id === selectedId);
+    if (!target) return;
+    if (target.libraryId) {
+      commit((current) => ({
+        ...current,
+        nodeLibrary: current.nodeLibrary.map((node) => node.id === target.libraryId ? { ...node, ...patch } : node),
+        slides: current.slides.map((item) => {
+          const sharedNodeIds = item.instructionNodes.filter((node) => node.libraryId === target.libraryId).map((node) => node.id);
+          return {
+            ...item,
+            instructionNodes: item.instructionNodes.map((node) => node.libraryId === target.libraryId ? { ...node, ...patch } : node),
+            elements: target.nodeKind === "fontSize" && patch.value
+              ? item.elements.map((element) => item.edges.some((edge) => sharedNodeIds.includes(edge.source) && edge.target === element.id)
+                ? { ...element, fontSize: Number.parseInt(patch.value, 10) || element.fontSize }
+                : element)
+              : item.elements,
+          };
+        }),
+      }));
+      return;
+    }
     updateCurrentSlide((current) => ({
       ...current,
       instructionNodes: current.instructionNodes.map((node) => node.id === selectedId ? { ...node, ...patch } : node),
+      elements: target.nodeKind === "fontSize" && patch.value
+        ? current.elements.map((element) => current.edges.some((edge) => edge.source === selectedId && edge.target === element.id)
+          ? { ...element, fontSize: Number.parseInt(patch.value, 10) || element.fontSize }
+          : element)
+        : current.elements,
     }));
+  };
+
+  const setNodeReusable = (reusable) => {
+    const target = slide.instructionNodes.find((node) => node.id === selectedId);
+    if (!target) return;
+    if (reusable && !target.libraryId) {
+      const libraryNode = { id: id(), nodeKind: target.nodeKind, value: target.value };
+      commit((current) => ({
+        ...current,
+        nodeLibrary: [...current.nodeLibrary, libraryNode],
+        slides: current.slides.map((item) => item.id === slide.id ? {
+          ...item,
+          instructionNodes: item.instructionNodes.map((node) => node.id === selectedId ? { ...node, libraryId: libraryNode.id } : node),
+        } : item),
+      }));
+    } else if (!reusable && target.libraryId) {
+      updateCurrentSlide((current) => ({
+        ...current,
+        instructionNodes: current.instructionNodes.map((node) => node.id === selectedId ? { ...node, libraryId: null } : node),
+      }));
+    }
   };
 
   const requestObjectAlternatives = async (sourceSlide, element) => {
@@ -587,9 +702,16 @@ function App() {
     setNotice("Generating this object...");
     try {
       const alternatives = await requestObjectAlternatives(slide, element);
-      if (!alternatives) throw new Error("Connect a writing direction node to this object first.");
-      setSampleReview({ slideId: slide.id, elementId: element.id, alternatives });
-      setNotice("Choose a version");
+      if (!alternatives) throw new Error("Connect at least one node to this object first.");
+      updateCurrentSlide((current) => ({
+        ...current,
+        elements: current.elements.map((item) => item.id === element.id ? {
+          ...item,
+          aiOutputs: alternatives,
+          aiUnreviewed: true,
+        } : item),
+      }));
+      setNotice("New AI output is ready for review");
     } catch (error) {
       setNotice(error.message || "Could not generate alternatives");
       if (!settings.apiKey) setSettingsOpen(true);
@@ -605,7 +727,7 @@ function App() {
       .filter((element) => element.type === "text" && sourceSlide.edges.some((edge) => edge.target === element.id))
       .map((element) => ({ sourceSlide, element })));
     if (!tasks.length) {
-      setNotice("Connect writing direction nodes to text objects first.");
+      setNotice("Connect nodes to text objects first.");
       return;
     }
     setBusy(true);
@@ -615,19 +737,19 @@ function App() {
     try {
       for (const { sourceSlide, element } of tasks) {
         const alternatives = await requestObjectAlternatives(sourceSlide, element);
-        if (alternatives?.[0]) updates.set(`${sourceSlide.id}:${element.id}`, alternatives[0]);
+        if (alternatives?.length) updates.set(`${sourceSlide.id}:${element.id}`, alternatives);
       }
       commit((current) => ({
         ...current,
         slides: current.slides.map((item) => ({
           ...item,
           elements: item.elements.map((element) => {
-            const text = updates.get(`${item.id}:${element.id}`);
-            return text ? { ...element, text } : element;
+            const alternatives = updates.get(`${item.id}:${element.id}`);
+            return alternatives ? { ...element, aiOutputs: alternatives, aiUnreviewed: true } : element;
           }),
         })),
       }));
-      setNotice(scope === "deck" ? "Entire deck generated" : "Slide generated");
+      setNotice(scope === "deck" ? "Deck outputs are ready for review" : "Slide outputs are ready for review");
     } catch (error) {
       setNotice(error.message || "AI generation failed");
       if (!settings.apiKey) setSettingsOpen(true);
@@ -637,19 +759,10 @@ function App() {
     }
   };
 
-  const applySample = (text) => {
-    updateSlide(sampleReview.slideId, (current) => ({
-      ...current,
-      elements: current.elements.map((element) => element.id === sampleReview.elementId ? { ...element, text } : element),
-    }));
-    setSampleReview(null);
-  };
-
   const writeProjectFile = async (handle) => {
     const writable = await handle.createWritable();
     await writable.write(JSON.stringify(project, null, 2));
     await writable.close();
-    fileHandleRef.current = handle;
     setNotice("Project file saved");
   };
 
@@ -677,15 +790,7 @@ function App() {
   };
 
   const saveProject = async () => {
-    if (fileHandleRef.current) {
-      try {
-        await writeProjectFile(fileHandleRef.current);
-      } catch {
-        await saveProjectAs();
-      }
-    } else {
-      await saveProjectAs();
-    }
+    await saveProjectAs();
   };
 
   const loadProjectFile = async (file) => {
@@ -709,7 +814,6 @@ function App() {
           multiple: false,
           types: [{ description: "Vibe Deck project", accept: { "application/json": [".vibedeck", ".json"] } }],
         });
-        fileHandleRef.current = handle;
         await loadProjectFile(await handle.getFile());
       } else {
         fileInputRef.current?.click();
@@ -720,8 +824,8 @@ function App() {
   };
 
   const newProject = () => {
+    if (!window.confirm("Create a new project? Your current project remains available only if you save it first.")) return;
     const next = { ...clone(initialProject), slides: [blankSlide()] };
-    fileHandleRef.current = null;
     setProject(next);
     setCurrentSlideId(next.slides[0].id);
     setSelectedId(null);
@@ -801,12 +905,7 @@ function App() {
                   aspect={project.aspect}
                   active={item.id === slide.id}
                   dragging={item.id === draggedSlideId}
-                  onDragStart={(event) => {
-                    event.dataTransfer.effectAllowed = "move";
-                    event.dataTransfer.setData("text/slide-id", item.id);
-                    setDraggedSlideId(item.id);
-                  }}
-                  onDragEnd={() => { setDraggedSlideId(null); setDropIndex(null); }}
+                  onDragStart={(event) => startSlideDrag(event, item.id)}
                   onSelect={() => { setCurrentSlideId(item.id); setSelectedId(null); setEditingId(null); }}
                   onGenerate={() => { setCurrentSlideId(item.id); generateScope("slide", item); }}
                   onContext={(event) => { event.preventDefault(); event.stopPropagation(); setContextMenu({ kind: "slide", id: item.id, x: event.clientX, y: event.clientY }); }}
@@ -823,7 +922,25 @@ function App() {
           <div className="canvas-toolbar">
             <button type="button" onClick={() => addElement(newText(project.defaults))}>{icon("add")} Text box</button>
             <button type="button" onClick={() => addElement(newShape(project.defaults))}>{icon("box")} Shape</button>
-            <button type="button" onClick={() => addInstructionNode(newNode("vibe"))}>{icon("node")} Direction Node</button>
+            <div className={`node-picker ${nodeMenuOpen ? "open" : ""}`}>
+              <button type="button" onClick={() => setNodeMenuOpen((open) => !open)}>{icon("node")} Node {icon("chevron")}</button>
+              <div className="node-menu">
+                <small className="node-menu-label">NEW NODE</small>
+                {Object.entries(instructionTypes).map(([kind, definition]) => (
+                  <button type="button" key={kind} onClick={() => { addInstructionNode(newNode(kind)); setNodeMenuOpen(false); }}>
+                    <i style={{ background: definition.color }} />
+                    <span><strong>{definition.label}</strong><small>{definition.hint}</small></span>
+                  </button>
+                ))}
+                {project.nodeLibrary.length > 0 && <small className="node-menu-label used-label">USED NODES</small>}
+                {project.nodeLibrary.map((libraryNode) => (
+                  <button type="button" key={libraryNode.id} onClick={() => addReusableNode(libraryNode)}>
+                    <i style={{ background: instructionTypes[libraryNode.nodeKind].color }} />
+                    <span><strong>{instructionTypes[libraryNode.nodeKind].label}</strong><small>{libraryNode.value}</small></span>
+                  </button>
+                ))}
+              </div>
+            </div>
             <span className="canvas-hint">Drag from a node handle to any side of a text box</span>
             <button type="button" className="refine-page" onClick={() => generateScope("slide")} disabled={busy}>{icon("spark")} AI Gen Slide</button>
           </div>
@@ -861,9 +978,7 @@ function App() {
                   maxZoom={1}
                   fitView={false}
                   proOptions={{ hideAttribution: true }}
-                >
-                  <Background color="#dce1e5" gap={20} size={0.6} />
-                </ReactFlow>
+                />
               </div>
               {!slide.elements.length && (
                 <div className="empty-state"><span>Blank slide</span><strong>Add a text box, shape, or direction node.</strong></div>
@@ -907,6 +1022,8 @@ function App() {
               element={selected || selectedInstruction}
               isInstruction={Boolean(selectedInstruction)}
               update={selectedInstruction ? updateInstruction : updateSelected}
+              reusable={Boolean(selectedInstruction?.libraryId)}
+              onReusableChange={setNodeReusable}
               onDelete={() => removeElement(selectedId)}
               onGenerate={selected ? generateSelected : undefined}
               busy={selected ? generatingIds.includes(selected.id) : false}
@@ -919,8 +1036,8 @@ function App() {
               </div>
               {panel === "context" ? (
                 <div className="panel-content">
-                  <CollapsibleField label="Who I am" value={project.context.whoAmI} onChange={(value) => updateContext("whoAmI", value)} placeholder="Company, role, point of view" />
-                  <CollapsibleField label="Target audience" value={project.context.audience} onChange={(value) => updateContext("audience", value)} placeholder="Who will see this deck?" />
+                  <CollapsibleField label="Who I am" value={project.context.whoAmI} onChange={(value) => updateContext("whoAmI", value)} placeholder="Company, role, point of view" area />
+                  <CollapsibleField label="Target audience" value={project.context.audience} onChange={(value) => updateContext("audience", value)} placeholder="Who will see this deck?" area />
                   <CollapsibleField label="Purpose of deck" value={project.context.purpose} onChange={(value) => updateContext("purpose", value)} placeholder="What should this deck achieve?" area />
                   <CollapsibleField label="Key facts / stacks" value={project.context.keyStacks} onChange={(value) => updateContext("keyStacks", value)} placeholder="Facts, products, technology, constraints" area />
                   <CollapsibleField label="Vibe" value={project.context.vibe} onChange={(value) => updateContext("vibe", value)} placeholder="Editorial, bold, minimal, premium..." area />
@@ -952,22 +1069,6 @@ function App() {
         </div>
       )}
 
-      {sampleReview && (
-        <Modal title="Choose a content version" wide onClose={() => setSampleReview(null)}>
-          <p className="modal-copy">Preview the alternatives generated from the nodes connected to this object.</p>
-          <div className="sample-grid">
-            {sampleReview.alternatives.map((alternative, index) => (
-              <article className="sample-card" key={`${alternative}-${index}`}>
-                <small>VERSION {index + 1}</small>
-                <p>{alternative}</p>
-                <button type="button" onClick={() => applySample(alternative)}>Apply this version</button>
-              </article>
-            ))}
-          </div>
-          <button type="button" className="secondary full" onClick={() => setSampleReview(null)}>Keep original</button>
-        </Modal>
-      )}
-
       {settingsOpen && (
         <Modal title="OpenAI Connection" onClose={() => setSettingsOpen(false)}>
           <div className="connection-settings">
@@ -988,6 +1089,7 @@ function InstructionFlowNode({ data, selected }) {
     <div className={`flow-instruction-node ${selected ? "selected" : ""}`} style={{ "--node-color": definition.color }}>
       <small>{definition.hint}</small>
       <span title={data.value}>{data.value}</span>
+      {data.reusable && <b className="reusable-mark">USED</b>}
       <Handle type="source" position={Position.Right} id="instruction" className="flow-source-handle" />
     </div>
   );
@@ -1034,6 +1136,7 @@ function SlideElement({ element, assignedInstructions, selected, editing, onPoin
           {icon(generating ? "clock" : "spark")}
         </button>
       )}
+      {element.aiUnreviewed && <span className="unreviewed-output" title="New AI output">{icon("unread")}</span>}
       {assignedInstructions.length > 0 && (
         <div className="attribute-chips">
           {assignedInstructions.map((node) => (
@@ -1048,10 +1151,11 @@ function SlideElement({ element, assignedInstructions, selected, editing, onPoin
   );
 }
 
-function SlideThumbnail({ slide, index, aspect, active, dragging, onSelect, onGenerate, onContext, onDragStart, onDragEnd }) {
+function SlideThumbnail({ slide, index, aspect, active, dragging, onSelect, onGenerate, onContext, onDragStart }) {
+  const hasUnreviewed = slide.elements.some((element) => element.aiUnreviewed);
   return (
-    <div className={`slide-row ${active ? "active" : ""} ${slide.hidden ? "hidden-slide" : ""} ${dragging ? "dragging" : ""}`} draggable onDragStart={onDragStart} onDragEnd={onDragEnd} onContextMenu={onContext}>
-      <span className="slide-number">{index + 1}</span>
+    <div className={`slide-row ${active ? "active" : ""} ${slide.hidden ? "hidden-slide" : ""} ${dragging ? "dragging" : ""}`} data-slide-index={index} onContextMenu={onContext}>
+      <button type="button" className="slide-drag-handle" onPointerDown={onDragStart} title="Drag to reorder">{icon("grip")}<span>{index + 1}</span></button>
       <div className="thumb-stack">
         <button type="button" className="thumbnail" style={{ aspectRatio: aspectRatios[aspect], background: slide.background }} onClick={onSelect}>
           {slide.elements.filter((element) => element.type !== "node").map((element) => (
@@ -1065,6 +1169,7 @@ function SlideThumbnail({ slide, index, aspect, active, dragging, onSelect, onGe
             </span>
           ))}
           {slide.hidden && <span className="hidden-badge">{icon("eyeOff")}</span>}
+          {hasUnreviewed && <span className="thumbnail-unreviewed" title="New AI output">{icon("unread")}</span>}
         </button>
         <div className="slide-meta"><span>Slide {index + 1}</span><button type="button" onClick={onGenerate}>{icon("spark")} AI Gen</button></div>
       </div>
@@ -1072,18 +1177,19 @@ function SlideThumbnail({ slide, index, aspect, active, dragging, onSelect, onGe
   );
 }
 
-function SlideDropZone({ active, onDragOver, onDrop }) {
-  return <div className={`slide-drop-zone ${active ? "active" : ""}`} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; onDragOver(); }} onDrop={(event) => { event.preventDefault(); onDrop(event.dataTransfer.getData("text/slide-id")); }} />;
+function SlideDropZone({ active }) {
+  return <div className={`slide-drop-zone ${active ? "active" : ""}`} />;
 }
 
-function Inspector({ element, isInstruction, update, onDelete, onGenerate, busy }) {
+function Inspector({ element, isInstruction, update, reusable, onReusableChange, onDelete, onGenerate, busy }) {
   if (isInstruction) {
     const definition = instructionTypes[element.nodeKind];
     return (
       <>
         <div className="inspector-title"><div><i style={{ background: definition.color }} /><strong>{definition.label}</strong></div><span>Node</span></div>
         <div className="panel-content">
-          <Field label="Direction" value={element.value} onChange={(value) => update({ value })} area={element.nodeKind === "vibe"} />
+          <Field label={definition.label} value={element.value} onChange={(value) => update({ value })} area={element.nodeKind === "vibe"} />
+          <Toggle label="Used node" description="Reuse this shared node on other objects or slides." checked={reusable} onChange={onReusableChange} />
           <button type="button" className="delete-control" onClick={onDelete}>{icon("trash")} Delete node</button>
         </div>
       </>
@@ -1095,9 +1201,23 @@ function Inspector({ element, isInstruction, update, onDelete, onGenerate, busy 
       <div className="panel-content">
         {element.type === "text" ? (
           <>
-            <Field label="Content" value={element.text} onChange={(value) => update({ text: value })} area />
-            <button type="button" className="generate-control" onClick={onGenerate} disabled={busy}>{icon(busy ? "clock" : "spark")} {busy ? "Generating..." : "AI Gen"}</button>
-            <RangeField label="Font size" value={element.fontSize} min="8" max="72" onChange={(value) => update({ fontSize: Number(value) })} />
+            <section className="inspector-card">
+              <strong>Content</strong>
+              <Field label="" value={element.text} onChange={(value) => update({ text: value })} area />
+            </section>
+            <section className="inspector-card ai-output-card">
+              <div className="card-heading">
+                <strong>AI Gen</strong>
+                {element.aiUnreviewed && <span>{icon("unread")} New</span>}
+              </div>
+              <button type="button" className="generate-control" onClick={onGenerate} disabled={busy}>{icon(busy ? "clock" : "spark")} {busy ? "Generating..." : "Generate options"}</button>
+              <div className="output-list">
+                {(element.aiOutputs || []).map((output, index) => (
+                  <article key={`${output}-${index}`}><small>OPTION {index + 1}</small><p>{output}</p></article>
+                ))}
+                {!element.aiOutputs?.length && <p className="empty-output">Generated text will appear here. Edit the Content card manually to use it.</p>}
+              </div>
+            </section>
           </>
         ) : (
           <>
@@ -1155,6 +1275,15 @@ function ColorPicker({ label, value, onChange }) {
 
 function RangeField({ label, value, min, max, onChange }) {
   return <label className="field range-field"><span>{label}<b>{value}</b></span><input type="range" value={value} min={min} max={max} onChange={(event) => onChange(event.target.value)} /></label>;
+}
+
+function Toggle({ label, description, checked, onChange }) {
+  return (
+    <label className="toggle-row">
+      <span><strong>{label}</strong><small>{description}</small></span>
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+    </label>
+  );
 }
 
 export default App;

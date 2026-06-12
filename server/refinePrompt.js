@@ -2,23 +2,27 @@ export function getObjectInstructions({ element, instructionNodes = [], edges = 
   return edges
     .filter((edge) => edge.target === element.id)
     .map((edge) => instructionNodes.find((node) => node.id === edge.source))
-    .filter((node) => node?.nodeKind === "vibe");
+    .filter(Boolean);
 }
 
 export function buildObjectRefinementPrompt({ element, instructionNodes = [], edges = [] }) {
-  const directions = getObjectInstructions({ element, instructionNodes, edges })
-    .map((node) => node.value.trim())
+  const instructions = getObjectInstructions({ element, instructionNodes, edges });
+  const sampleNode = instructions.find((node) => node.nodeKind === "samples");
+  const count = Math.max(1, Math.min(5, Number.parseInt(sampleNode?.value, 10) || 3));
+  const directions = instructions
+    .filter((node) => node.nodeKind === "vibe" || node.nodeKind === "wordCount")
+    .map((node) => `${node.nodeKind}: ${node.value.trim()}`)
     .filter(Boolean);
 
   return {
-    count: 3,
+    count,
     prompt: `
-Rewrite one presentation text object and return 3 distinct alternatives.
+Rewrite one presentation text object and return ${count} distinct alternatives.
 
 Original text:
 ${element.text || ""}
 
-Writing direction from connected nodes:
+Connected content instructions:
 ${directions.join("\n") || "No connected writing direction."}
 
 Use only the original text and the connected writing direction above.
