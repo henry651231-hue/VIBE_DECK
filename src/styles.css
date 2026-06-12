@@ -84,14 +84,37 @@ button:disabled { cursor: default; opacity: .35; }
 .empty-state strong { margin-top: 8px; max-width: 300px; color: #90979d; font-size: 15px; font-weight: 500; }
 .zoom-label { height: 28px; flex: 0 0 28px; text-align: center; color: #7f868c; font-size: 10px; }
 
-.connections { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-.connections path { fill: none; stroke-width: .28; vector-effect: non-scaling-stroke; }
+.flow-overlay { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+.flow-overlay .react-flow { background: transparent; pointer-events: none; }
+.flow-overlay .react-flow__pane { pointer-events: none; }
+.flow-overlay .react-flow__node-instruction,
+.flow-overlay .react-flow__handle,
+.flow-overlay .react-flow__edge { pointer-events: all; }
+.flow-overlay .react-flow__node-objectTarget { pointer-events: none !important; background: transparent; border: 0; }
+.flow-overlay .react-flow__controls { display: none; }
+.flow-overlay .react-flow__edge-path { cursor: pointer; }
+.flow-overlay .react-flow__edge.selected .react-flow__edge-path { stroke-width: 4 !important; }
+.flow-instruction-node { position: relative; width: 176px; min-height: 72px; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--node-color) 65%, white); border-left: 7px solid var(--node-color); border-radius: 8px; background: color-mix(in srgb, var(--node-color) 12%, white); box-shadow: 0 6px 18px rgba(20,25,28,.14); cursor: grab; }
+.flow-instruction-node:active { cursor: grabbing; }
+.flow-instruction-node.selected { box-shadow: 0 0 0 3px color-mix(in srgb, var(--node-color) 28%, transparent), 0 6px 18px rgba(20,25,28,.14); }
+.flow-instruction-node small { color: color-mix(in srgb, var(--node-color) 72%, white); font-size: 8px; font-weight: 900; letter-spacing: .14em; }
+.flow-instruction-node strong { font-size: 12px; }
+.flow-instruction-node span { color: #565d63; font-size: 10px; }
+.flow-instruction-node em { margin-top: 3px; color: #858c92; font-size: 8px; font-style: normal; }
+.flow-source-handle { right: -8px !important; width: 15px !important; height: 15px !important; border: 3px solid white !important; background: var(--node-color) !important; box-shadow: 0 0 0 1px var(--node-color); }
+.flow-object-target { position: absolute; inset: 0; width: 100%; height: 100%; }
+.flow-target-handle { left: -8px !important; width: 15px !important; height: 24px !important; border: 3px solid white !important; border-radius: 5px !important; background: #9aa2a8 !important; box-shadow: 0 0 0 1px #747c82; opacity: .3; pointer-events: all !important; transition: opacity .15s, transform .15s, background .15s; }
+.react-flow__handle.connectingto,
+.react-flow__handle.valid,
+.flow-target-handle:hover { opacity: 1; transform: scale(1.15); background: #1d9fe2 !important; }
 .slide-element { position: absolute; touch-action: none; }
 .slide-element.selected { outline: 1.5px solid #1d9fe2; outline-offset: 2px; }
 .content-object { cursor: move; }
 .content-object textarea { width: 100%; height: 100%; padding: 0; resize: none; overflow: hidden; border: 0; outline: none; background: transparent; line-height: 1.15; cursor: move; pointer-events: none; }
 .content-object.editing textarea { cursor: text; pointer-events: auto; user-select: text; }
 .content-object.shape textarea { padding: 8px; }
+.attribute-chips { position: absolute; left: 0; bottom: -18px; z-index: 8; display: flex; gap: 4px; pointer-events: none; }
+.attribute-chips span { max-width: 140px; overflow: hidden; padding: 2px 5px; border: 1px solid color-mix(in srgb, var(--chip-color) 55%, white); border-radius: 99px; color: color-mix(in srgb, var(--chip-color) 80%, #222); background: color-mix(in srgb, var(--chip-color) 10%, white); font-size: 7px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
 .direction-node { display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--node-color) 65%, white); border-left: 6px solid var(--node-color); border-radius: 6px; background: color-mix(in srgb, var(--node-color) 12%, white); box-shadow: 0 4px 12px rgba(20,25,28,.1); cursor: move; }
 .direction-node small { color: color-mix(in srgb, var(--node-color) 65%, white); font-size: 7px; font-weight: 900; letter-spacing: .12em; }
 .direction-node strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
@@ -113,6 +136,7 @@ button:disabled { cursor: default; opacity: .35; }
 .position-grid input { min-width: 0; border: 1px solid #dce0e3; border-radius: 6px; padding: 7px; }
 .node-help { padding: 10px; border-radius: 7px; color: #6d747a; background: #f3f5f6; font-size: 10px; line-height: 1.45; }
 .delete-control { height: 34px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid #efc7c7; border-radius: 7px; color: #b83b3b; background: #fff8f8; font-size: 11px; }
+.generate-control { height: 36px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid #c9bcf7; border-radius: 7px; color: #6245cc; background: #f3f0ff; font-size: 11px; font-weight: 800; }
 
 .context-menu { position: fixed; z-index: 100; min-width: 160px; padding: 5px; border: 1px solid #d8dde0; border-radius: 8px; background: white; box-shadow: 0 14px 34px rgba(20,25,28,.2); }
 .context-menu button { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 0; border-radius: 5px; background: white; text-align: left; font-size: 11px; }
@@ -152,6 +176,12 @@ button:disabled { cursor: default; opacity: .35; }
 .hierarchy-level small { color: #8f979d; font-size: 8px; }
 .connection-settings { max-width: 500px; margin: 0 auto 20px; }
 .connection-settings .field { margin-bottom: 15px; }
+.sample-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.sample-card { display: flex; flex-direction: column; min-height: 150px; padding: 14px; border: 1px solid #dfe3e6; border-radius: 9px; background: #fafbfb; }
+.sample-card small { color: #765ed2; font-size: 8px; font-weight: 900; letter-spacing: .12em; }
+.sample-card p { flex: 1; color: #33383c; font-size: 12px; line-height: 1.45; }
+.sample-card button { height: 32px; border: 0; border-radius: 6px; color: white; background: #6d54d6; font-size: 10px; font-weight: 800; }
+.secondary.full { border: 1px solid #d8dde0; color: #555c62; background: white; }
 
 @media (max-height: 720px) {
   .panel-content { padding: 13px 16px; gap: 10px; }

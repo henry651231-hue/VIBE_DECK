@@ -14,8 +14,9 @@ test("exports an editable PowerPoint buffer", async () => {
         elements: [
           { id: "title", type: "text", text: "Editable title", x: 10, y: 10, w: 50, h: 12, fontSize: 28, color: "#111315", bold: true },
           { id: "shape", type: "shape", text: "Editable shape", x: 10, y: 30, w: 30, h: 20, fontSize: 18, color: "#111315", fill: "#e9edf2", borderColor: "#e9edf2", borderWidth: 0 },
-          { id: "node", type: "node", nodeKind: "vibe", value: "Bold", connections: ["title"] },
         ],
+        instructionNodes: [{ id: "node", nodeKind: "vibe", value: "Bold" }],
+        edges: [{ id: "edge", source: "node", target: "title" }],
       },
     ],
   });

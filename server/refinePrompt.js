@@ -1,13 +1,12 @@
-export function buildRefinementPrompt({ context = {}, aiConfig = {}, feedback = "", elements = [] }) {
+export function buildRefinementPrompt({ context = {}, aiConfig = {}, feedback = "", elements = [], instructionNodes = [], edges = [] }) {
   const textElements = elements.filter((element) => element.type === "text" || element.type === "shape");
   const existingContent = textElements.map((element) => element.text).filter(Boolean);
   const textById = new Map(textElements.map((element) => [element.id, element.text || ""]));
-  const nodeDirections = elements
-    .filter((element) => element.type === "node")
-    .map((element) => {
-      const linkedText = (element.connections || []).map((targetId) => textById.get(targetId)).filter(Boolean);
+  const nodeDirections = instructionNodes
+    .map((node) => {
+      const linkedText = edges.filter((edge) => edge.source === node.id).map((edge) => textById.get(edge.target)).filter(Boolean);
       const scope = aiConfig.respectNodeScope === false ? "entire slide" : linkedText.join(" | ") || "no object linked";
-      return `${element.nodeKind}: ${element.value}; apply to: ${scope}`;
+      return `${node.nodeKind}: ${node.value}; apply to: ${scope}`;
     })
     .join("\n");
 
@@ -53,4 +52,44 @@ Do not use markdown.
 Consider the requested number of alternatives internally, then return only the strongest result.
 ${aiConfig.noInventedFacts === false ? "" : "Do not invent statistics, sources, customers, or factual claims not present in the input."}
 `.trim();
+}
+
+export function getObjectInstructions({ element, instructionNodes = [], edges = [] }) {
+  return edges
+    .filter((edge) => edge.target === element.id)
+    .map((edge) => instructionNodes.find((node) => node.id === edge.source))
+    .filter(Boolean);
+}
+
+export function buildObjectRefinementPrompt({ context = {}, aiConfig = {}, feedback = "", element, instructionNodes = [], edges = [] }) {
+  const instructions = getObjectInstructions({ element, instructionNodes, edges });
+  const sampleNode = instructions.find((node) => node.nodeKind === "samples");
+  const requested = Math.max(1, Math.min(5, Number.parseInt(sampleNode?.value, 10) || aiConfig.defaultSamples || 3));
+  const directions = instructions
+    .filter((node) => node.nodeKind !== "fontSize" && node.nodeKind !== "samples")
+    .map((node) => `${node.nodeKind}: ${node.value}`)
+    .join("\n");
+
+  return {
+    count: requested,
+    prompt: `
+Rewrite one presentation object and return ${requested} distinct alternatives.
+
+Original text: ${element.text || ""}
+Audience: ${context.audience || "Not provided"}
+Purpose: ${context.purpose || "Not provided"}
+Deck tone: ${context.tone || "Confident"}
+Output language: ${aiConfig.language || "Match source"}
+Factuality: ${aiConfig.factuality || "Strict"}
+Preserve meaning: ${aiConfig.preserveMeaning === false ? "No" : "Yes"}
+Advanced project instructions: ${aiConfig.advancedInstructions || "None"}
+Connected object instructions:
+${directions || "No AI writing instructions."}
+Latest feedback: ${feedback || "Improve the content."}
+
+Return JSON only using {"alternatives":["text"]}.
+Each alternative must be concise and usable directly in the existing text box.
+${aiConfig.noInventedFacts === false ? "" : "Do not invent facts, numbers, sources, customers, or claims."}
+`.trim(),
+  };
 }

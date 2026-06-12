@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildRefinementPrompt } from "../server/refinePrompt.js";
+import { buildObjectRefinementPrompt, buildRefinementPrompt } from "../server/refinePrompt.js";
 
 test("applies the AI configuration hierarchy and connected node scope", () => {
   const prompt = buildRefinementPrompt({
@@ -17,8 +17,9 @@ test("applies the AI configuration hierarchy and connected node scope", () => {
     feedback: "Make it shorter.",
     elements: [
       { id: "title", type: "text", text: "Original claim" },
-      { type: "node", nodeKind: "vibe", value: "Visionary", connections: ["title"] },
     ],
+    instructionNodes: [{ id: "vibe-node", nodeKind: "vibe", value: "Visionary" }],
+    edges: [{ id: "edge", source: "vibe-node", target: "title" }],
   });
 
   assert.match(prompt, /Project AI configuration/);
@@ -27,4 +28,23 @@ test("applies the AI configuration hierarchy and connected node scope", () => {
   assert.match(prompt, /Advanced instructions: Avoid jargon\./);
   assert.match(prompt, /vibe: Visionary; apply to: Original claim/);
   assert.match(prompt, /Latest user feedback: Make it shorter\./);
+});
+
+test("creates object alternatives from connected nodes", () => {
+  const result = buildObjectRefinementPrompt({
+    element: { id: "title", text: "Original claim" },
+    aiConfig: { defaultSamples: 2, noInventedFacts: true },
+    instructionNodes: [
+      { id: "length", nodeKind: "wordCount", value: "20 words" },
+      { id: "samples", nodeKind: "samples", value: "4 samples" },
+    ],
+    edges: [
+      { source: "length", target: "title" },
+      { source: "samples", target: "title" },
+    ],
+  });
+
+  assert.equal(result.count, 4);
+  assert.match(result.prompt, /wordCount: 20 words/);
+  assert.doesNotMatch(result.prompt, /samples: 4 samples/);
 });

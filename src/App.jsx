@@ -1,4 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  applyEdgeChanges,
+  applyNodeChanges,
+  Background,
+  Controls,
+  Handle,
+  MarkerType,
+  Position,
+  ReactFlow,
+  reconnectEdge,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
 
 const STORAGE_KEY = "vibe-deck-project-v1";
 const SETTINGS_KEY = "vibe-deck-settings-v1";
@@ -13,7 +25,7 @@ const defaultAiConfig = {
 };
 
 const aspectRatios = { wide: 16 / 9, standard: 4 / 3, portrait: 3 / 4 };
-const nodeTypes = {
+const instructionTypes = {
   wordCount: { label: "Content length", hint: "WORDS", color: "#7c5ce7", value: "80 words" },
   vibe: { label: "Writing direction", hint: "VIBE", color: "#e05d87", value: "Clear and visionary" },
   fontSize: { label: "Font size", hint: "TYPE", color: "#ed8b32", value: "24 pt" },
@@ -29,7 +41,7 @@ function clone(value) {
 }
 
 function blankSlide() {
-  return { id: id(), name: "Untitled slide", background: "#ffffff", hidden: false, elements: [] };
+  return { id: id(), name: "Untitled slide", background: "#ffffff", hidden: false, elements: [], instructionNodes: [], edges: [] };
 }
 
 const initialProject = {
@@ -53,7 +65,11 @@ const initialProject = {
 function normalizeProject(saved) {
   if (!saved) return initialProject;
   if (Array.isArray(saved.slides) && saved.slides.length) {
-    return { ...saved, aiConfig: { ...defaultAiConfig, ...saved.aiConfig } };
+    return {
+      ...saved,
+      aiConfig: { ...defaultAiConfig, ...saved.aiConfig },
+      slides: saved.slides.map(migrateSlideGraph),
+    };
   }
   const slide = blankSlide();
   slide.background = saved.background || "#ffffff";
@@ -65,6 +81,25 @@ function normalizeProject(saved) {
     background: undefined,
     elements: undefined,
     slides: [slide],
+  };
+}
+
+function migrateSlideGraph(slide) {
+  const legacyNodes = (slide.elements || []).filter((element) => element.type === "node");
+  const instructionNodes = slide.instructionNodes || legacyNodes.map(({ connections, ...node }) => node);
+  const edges = slide.edges || legacyNodes.flatMap((node) =>
+    (node.connections || []).map((targetId) => ({
+      id: id(),
+      source: node.id,
+      target: targetId,
+      type: "smoothstep",
+    })),
+  );
+  return {
+    ...slide,
+    elements: (slide.elements || []).filter((element) => element.type !== "node"),
+    instructionNodes,
+    edges,
   };
 }
 
@@ -99,17 +134,15 @@ function newShape(defaults) {
 }
 
 function newNode(kind) {
-  const definition = nodeTypes[kind];
+  const definition = instructionTypes[kind];
   return {
     id: id(),
-    type: "node",
     nodeKind: kind,
     value: definition.value,
     x: 67,
     y: 62,
     w: 22,
     h: 12,
-    connections: [],
   };
 }
 
@@ -158,9 +191,12 @@ function App() {
   const [settingsTab, setSettingsTab] = useState("ai");
   const [refineOpen, setRefineOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [sampleReview, setSampleReview] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
-  const [linkingNodeId, setLinkingNodeId] = useState(null);
   const [nodeMenuOpen, setNodeMenuOpen] = useState(false);
+  const [flowNodes, setFlowNodes] = useState([]);
+  const [flowEdges, setFlowEdges] = useState([]);
+  const [canvasSize, setCanvasSize] = useState({ width: 960, height: 540 });
   const [leftWidth, setLeftWidth] = useState(220);
   const [rightWidth, setRightWidth] = useState(300);
   const canvasRef = useRef(null);
@@ -169,8 +205,7 @@ function App() {
 
   const slide = project.slides.find((item) => item.id === currentSlideId) || project.slides[0];
   const selected = slide.elements.find((element) => element.id === selectedId);
-  const contentObjects = slide.elements.filter((element) => element.type !== "node");
-  const nodeObjects = slide.elements.filter((element) => element.type === "node");
+  const selectedInstruction = slide.instructionNodes.find((node) => node.id === selectedId);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -186,6 +221,48 @@ function App() {
   }, [settings]);
 
   useEffect(() => {
+    if (!canvasRef.current) return undefined;
+    const observer = new ResizeObserver(([entry]) => {
+      setCanvasSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+    });
+    observer.observe(canvasRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const instructionNodes = slide.instructionNodes.map((node) => ({
+      id: node.id,
+      type: "instruction",
+      position: { x: (node.x / 100) * canvasSize.width, y: (node.y / 100) * canvasSize.height },
+      data: {
+        nodeKind: node.nodeKind,
+        value: node.value,
+        connectionCount: slide.edges.filter((edge) => edge.source === node.id).length,
+      },
+    }));
+    const targetNodes = slide.elements.map((element) => ({
+      id: `target:${element.id}`,
+      type: "objectTarget",
+      position: { x: (element.x / 100) * canvasSize.width, y: (element.y / 100) * canvasSize.height },
+      style: { width: (element.w / 100) * canvasSize.width, height: (element.h / 100) * canvasSize.height },
+      data: { elementId: element.id },
+      draggable: false,
+      selectable: false,
+    }));
+    setFlowNodes([...instructionNodes, ...targetNodes]);
+    setFlowEdges(slide.edges.map((edge) => {
+      const sourceNode = slide.instructionNodes.find((node) => node.id === edge.source);
+      return {
+        ...edge,
+        target: `target:${edge.target}`,
+        type: "smoothstep",
+        markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+        style: { stroke: instructionTypes[sourceNode?.nodeKind]?.color || "#6c55c9", strokeWidth: 2 },
+      };
+    }));
+  }, [slide.id, slide.instructionNodes, slide.elements, slide.edges, canvasSize]);
+
+  useEffect(() => {
     const onKey = (event) => {
       if ((event.key === "Delete" || event.key === "Backspace") && selectedId && !editingId && !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) {
         event.preventDefault();
@@ -193,7 +270,6 @@ function App() {
       }
       if (event.key === "Escape") {
         setEditingId(null);
-        setLinkingNodeId(null);
         setContextMenu(null);
       }
     };
@@ -230,12 +306,18 @@ function App() {
     setEditingId(null);
   };
 
+  const addInstructionNode = (node) => {
+    updateCurrentSlide((current) => ({ ...current, instructionNodes: [...current.instructionNodes, node] }));
+    setSelectedId(node.id);
+    setEditingId(null);
+  };
+
   const removeElement = (elementId) => {
     updateCurrentSlide((current) => ({
       ...current,
-      elements: current.elements
-        .filter((element) => element.id !== elementId)
-        .map((element) => element.type === "node" ? { ...element, connections: element.connections.filter((target) => target !== elementId) } : element),
+      elements: current.elements.filter((element) => element.id !== elementId),
+      instructionNodes: current.instructionNodes.filter((node) => node.id !== elementId),
+      edges: current.edges.filter((edge) => edge.id !== elementId && edge.source !== elementId && edge.target !== elementId),
     }));
     setSelectedId(null);
     setEditingId(null);
@@ -261,7 +343,9 @@ function App() {
       copied = clone(current.slides[index]);
       copied.id = id();
       copied.name = `${copied.name} copy`;
-      copied.elements = copied.elements.map((element) => ({ ...element, id: id(), connections: [] }));
+      copied.elements = copied.elements.map((element) => ({ ...element, id: id() }));
+      copied.instructionNodes = [];
+      copied.edges = [];
       const slides = [...current.slides];
       slides.splice(index + 1, 0, copied);
       return { ...current, slides };
@@ -318,16 +402,6 @@ function App() {
   const onElementPointerDown = (event, element, mode = "move") => {
     event.preventDefault();
     event.stopPropagation();
-    if (linkingNodeId && element.type !== "node") {
-      updateCurrentSlide((current) => ({
-        ...current,
-        elements: current.elements.map((item) => item.id === linkingNodeId
-          ? { ...item, connections: item.connections.includes(element.id) ? item.connections.filter((target) => target !== element.id) : [...item.connections, element.id] }
-          : item),
-      }));
-      setLinkingNodeId(null);
-      return;
-    }
     setSelectedId(element.id);
     if (editingId !== element.id) setEditingId(null);
     if (editingId === element.id) return;
@@ -380,15 +454,101 @@ function App() {
     splitRef.current = { side, startX: event.clientX, initial: side === "left" ? leftWidth : rightWidth };
   };
 
+  const onFlowNodesChange = useCallback((changes) => {
+    setFlowNodes((nodes) => applyNodeChanges(changes, nodes));
+  }, []);
+
+  const onFlowNodeDragStop = useCallback((_event, node) => {
+    if (node.type !== "instruction") return;
+    updateCurrentSlide((current) => ({
+      ...current,
+      instructionNodes: current.instructionNodes.map((item) => item.id === node.id ? {
+        ...item,
+        x: Math.max(0, Math.min(92, (node.position.x / canvasSize.width) * 100)),
+        y: Math.max(0, Math.min(92, (node.position.y / canvasSize.height) * 100)),
+      } : item),
+    }));
+  }, [canvasSize, slide.id]);
+
+  const onFlowConnect = useCallback((connection) => {
+    if (!connection.source || !connection.target?.startsWith("target:")) return;
+    const target = connection.target.replace("target:", "");
+    const sourceNode = slide.instructionNodes.find((node) => node.id === connection.source);
+    if (!sourceNode) return;
+    const duplicateType = slide.edges.some((edge) => {
+      const node = slide.instructionNodes.find((item) => item.id === edge.source);
+      return edge.target === target && node?.nodeKind === sourceNode.nodeKind;
+    });
+    if (duplicateType) {
+      setNotice(`This object already has a ${instructionTypes[sourceNode.nodeKind].label} instruction`);
+      return;
+    }
+    const edge = { id: id(), source: connection.source, target, type: "smoothstep" };
+    updateCurrentSlide((current) => ({
+      ...current,
+      edges: [...current.edges, edge],
+      elements: sourceNode.nodeKind === "fontSize"
+        ? current.elements.map((element) => element.id === target ? {
+          ...element,
+          fontSize: Number.parseInt(sourceNode.value, 10) || element.fontSize,
+        } : element)
+        : current.elements,
+    }));
+  }, [slide.id, slide.edges, slide.instructionNodes]);
+
+  const onFlowEdgesChange = useCallback((changes) => {
+    setFlowEdges((edges) => applyEdgeChanges(changes, edges));
+    const removed = changes.filter((change) => change.type === "remove").map((change) => change.id);
+    if (removed.length) {
+      updateCurrentSlide((current) => ({ ...current, edges: current.edges.filter((edge) => !removed.includes(edge.id)) }));
+    }
+  }, [slide.id]);
+
+  const onFlowReconnect = useCallback((oldEdge, connection) => {
+    if (!connection.source || !connection.target?.startsWith("target:")) return;
+    const target = connection.target.replace("target:", "");
+    setFlowEdges((edges) => reconnectEdge(oldEdge, connection, edges));
+    updateCurrentSlide((current) => ({
+      ...current,
+      edges: current.edges.map((edge) => edge.id === oldEdge.id ? {
+        ...edge,
+        source: connection.source,
+        target,
+      } : edge),
+    }));
+  }, [slide.id]);
+
+  const updateInstruction = (patch) => {
+    updateCurrentSlide((current) => ({
+      ...current,
+      instructionNodes: current.instructionNodes.map((node) => node.id === selectedId ? { ...node, ...patch } : node),
+      elements: current.instructionNodes.find((node) => node.id === selectedId)?.nodeKind === "fontSize" && patch.value
+        ? current.elements.map((element) => current.edges.some((edge) => edge.source === selectedId && edge.target === element.id)
+          ? { ...element, fontSize: Number.parseInt(patch.value, 10) || element.fontSize }
+          : element)
+        : current.elements,
+    }));
+  };
+
   const applyAiContent = (content) => {
-    const retainedNodes = slide.elements.filter((element) => element.type === "node");
-    const elements = [
-      newText(project.defaults, { text: content.eyebrow, x: 7, y: 8, w: 28, h: 6, fontSize: 14, color: "#1687c8", bold: true }),
-      newText(project.defaults, { text: content.title, x: 7, y: 17, w: 70, h: 15, fontSize: 30, bold: true }),
-      ...content.points.map((point, index) => newText(project.defaults, { text: `•  ${point}`, x: 9, y: 40 + index * 12, w: 68, h: 9, fontSize: 18 })),
-    ];
-    if (content.footer) elements.push(newText(project.defaults, { text: content.footer, x: 7, y: 89, w: 76, h: 5, fontSize: 9, color: "#6b7075" }));
-    updateCurrentSlide((current) => ({ ...current, elements: [...elements, ...retainedNodes.map((node) => ({ ...node, connections: [] }))] }));
+    const generatedText = [content.eyebrow, content.title, ...content.points.map((point) => `•  ${point}`), content.footer].filter(Boolean);
+    if (slide.elements.length) {
+      updateCurrentSlide((current) => ({
+        ...current,
+        elements: current.elements.map((element, index) => ({
+          ...element,
+          text: generatedText[index] || element.text,
+        })),
+      }));
+    } else {
+      const elements = [
+        newText(project.defaults, { text: content.eyebrow, x: 7, y: 8, w: 28, h: 6, fontSize: 14, color: "#1687c8", bold: true }),
+        newText(project.defaults, { text: content.title, x: 7, y: 17, w: 70, h: 15, fontSize: 30, bold: true }),
+        ...content.points.map((point, index) => newText(project.defaults, { text: `•  ${point}`, x: 9, y: 40 + index * 12, w: 68, h: 9, fontSize: 18 })),
+      ];
+      if (content.footer) elements.push(newText(project.defaults, { text: content.footer, x: 7, y: 89, w: 76, h: 5, fontSize: 9, color: "#6b7075" }));
+      updateCurrentSlide((current) => ({ ...current, elements }));
+    }
     setSelectedId(null);
   };
 
@@ -406,6 +566,8 @@ function App() {
           aiConfig: project.aiConfig,
           feedback,
           elements: slide.elements,
+          instructionNodes: slide.instructionNodes,
+          edges: slide.edges,
         }),
       });
       const payload = await response.json();
@@ -423,6 +585,46 @@ function App() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const generateSelected = async () => {
+    if (!selected) return;
+    setBusy(true);
+    setNotice("Generating alternatives for the selected object...");
+    try {
+      const response = await fetch("/api/refine-object", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey: settings.apiKey,
+          model: settings.model,
+          context: project.context,
+          aiConfig: project.aiConfig,
+          feedback,
+          element: selected,
+          instructionNodes: slide.instructionNodes,
+          edges: slide.edges.filter((edge) => edge.target === selected.id),
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error);
+      setSampleReview({ elementId: selected.id, alternatives: payload.alternatives });
+      setNotice("Choose an alternative to apply");
+    } catch (error) {
+      setNotice(error.message || "Could not generate alternatives");
+      if (!settings.apiKey) setSettingsOpen(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applySample = (text) => {
+    const elementId = sampleReview.elementId;
+    updateCurrentSlide((current) => ({
+      ...current,
+      elements: current.elements.map((element) => element.id === elementId ? { ...element, text } : element),
+    }));
+    setSampleReview(null);
   };
 
   const exportPptx = async () => {
@@ -501,15 +703,15 @@ function App() {
             <div className={`node-picker ${nodeMenuOpen ? "open" : ""}`}>
               <button type="button" onClick={() => setNodeMenuOpen((open) => !open)}>{icon("node")} Node {icon("chevron")}</button>
               <div className="node-menu">
-                {Object.entries(nodeTypes).map(([kind, definition]) => (
-                  <button type="button" key={kind} onClick={() => { addElement(newNode(kind)); setNodeMenuOpen(false); }}>
+                {Object.entries(instructionTypes).map(([kind, definition]) => (
+                  <button type="button" key={kind} onClick={() => { addInstructionNode(newNode(kind)); setNodeMenuOpen(false); }}>
                     <i style={{ background: definition.color }} />
                     <span><strong>{definition.label}</strong><small>{definition.hint}</small></span>
                   </button>
                 ))}
               </div>
             </div>
-            <span className="canvas-hint">{linkingNodeId ? "Click an object to connect it to the node" : "Double-click an object to edit"}</span>
+            <span className="canvas-hint">Drag from a node handle to an object handle</span>
             <button type="button" className="refine-page" onClick={() => setRefineOpen(true)}>{icon("spark")} Refine Page</button>
           </div>
           <div className="canvas-shell">
@@ -520,7 +722,35 @@ function App() {
               onPointerDown={() => { setSelectedId(null); setEditingId(null); }}
               onContextMenu={(event) => event.preventDefault()}
             >
-              <ConnectionLayer nodes={nodeObjects} objects={contentObjects} />
+              <div className="flow-overlay">
+                <ReactFlow
+                  nodes={flowNodes}
+                  edges={flowEdges}
+                  nodeTypes={flowNodeTypes}
+                  onNodesChange={onFlowNodesChange}
+                  onNodeDragStop={onFlowNodeDragStop}
+                  onEdgesChange={onFlowEdgesChange}
+                  onConnect={onFlowConnect}
+                  onReconnect={onFlowReconnect}
+                  onNodeClick={(_event, node) => node.type === "instruction" && setSelectedId(node.id)}
+                  onEdgeClick={(_event, edge) => setSelectedId(edge.id)}
+                  nodesConnectable
+                  edgesReconnectable
+                  deleteKeyCode={["Backspace", "Delete"]}
+                  panOnDrag={false}
+                  zoomOnScroll={false}
+                  zoomOnPinch={false}
+                  zoomOnDoubleClick={false}
+                  preventScrolling={false}
+                  minZoom={1}
+                  maxZoom={1}
+                  fitView={false}
+                  proOptions={{ hideAttribution: true }}
+                >
+                  <Background color="#dce1e5" gap={20} size={0.6} />
+                  <Controls showInteractive={false} />
+                </ReactFlow>
+              </div>
               {!slide.elements.length && (
                 <div className="empty-state"><span>Blank slide</span><strong>Add a text box, shape, or direction node.</strong></div>
               )}
@@ -528,13 +758,15 @@ function App() {
                 <SlideElement
                   key={element.id}
                   element={element}
+                  assignedInstructions={slide.edges
+                    .filter((edge) => edge.target === element.id)
+                    .map((edge) => slide.instructionNodes.find((node) => node.id === edge.source))
+                    .filter(Boolean)}
                   selected={element.id === selectedId}
                   editing={element.id === editingId}
-                  linking={element.id === linkingNodeId}
                   onPointerDown={onElementPointerDown}
                   onDoubleClick={() => element.type !== "node" && setEditingId(element.id)}
                   onChange={(patch) => { setSelectedId(element.id); updateSelected(patch); }}
-                  onLink={() => { setSelectedId(element.id); setLinkingNodeId(linkingNodeId === element.id ? null : element.id); }}
                   onContext={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedId(element.id); setContextMenu({ kind: "element", id: element.id, x: event.clientX, y: event.clientY }); }}
                 />
               ))}
@@ -546,8 +778,15 @@ function App() {
         <div className="split-handle" onPointerDown={(event) => startSplit(event, "right")} />
 
         <aside className="right-panel panel">
-          {selected ? (
-            <Inspector element={selected} update={updateSelected} onDelete={() => removeElement(selected.id)} />
+          {selected || selectedInstruction ? (
+            <Inspector
+              element={selected || selectedInstruction}
+              isInstruction={Boolean(selectedInstruction)}
+              update={selectedInstruction ? updateInstruction : updateSelected}
+              onDelete={() => removeElement(selectedId)}
+              onGenerate={selected ? generateSelected : undefined}
+              busy={busy}
+            />
           ) : (
             <>
               <div className="panel-tabs">
@@ -603,6 +842,22 @@ function App() {
         </Modal>
       )}
 
+      {sampleReview && (
+        <Modal title="Choose a content version" wide onClose={() => setSampleReview(null)}>
+          <p className="modal-copy">Preview the alternatives generated from the nodes connected to this object.</p>
+          <div className="sample-grid">
+            {sampleReview.alternatives.map((alternative, index) => (
+              <article className="sample-card" key={`${alternative}-${index}`}>
+                <small>VERSION {index + 1}</small>
+                <p>{alternative}</p>
+                <button type="button" onClick={() => applySample(alternative)}>Apply this version</button>
+              </article>
+            ))}
+          </div>
+          <button type="button" className="secondary full" onClick={() => setSampleReview(null)}>Keep original</button>
+        </Modal>
+      )}
+
       {settingsOpen && (
         <Modal title="AI Instructions" wide onClose={() => setSettingsOpen(false)}>
           <div className="settings-tabs">
@@ -642,45 +897,34 @@ function App() {
   );
 }
 
-function ConnectionLayer({ nodes, objects }) {
-  const lines = nodes.flatMap((node) => node.connections.map((targetId) => {
-    const target = objects.find((object) => object.id === targetId);
-    if (!target) return null;
-    return {
-      key: `${node.id}-${target.id}`,
-      color: nodeTypes[node.nodeKind].color,
-      x1: node.x,
-      y1: node.y + node.h / 2,
-      x2: target.x + target.w,
-      y2: target.y + target.h / 2,
-    };
-  }).filter(Boolean));
+function InstructionFlowNode({ data, selected }) {
+  const definition = instructionTypes[data.nodeKind];
   return (
-    <svg className="connections" viewBox="0 0 100 100" preserveAspectRatio="none">
-      {lines.map((line) => (
-        <g key={line.key}>
-          <path d={`M ${line.x1} ${line.y1} C ${line.x1 - 8} ${line.y1}, ${line.x2 + 8} ${line.y2}, ${line.x2} ${line.y2}`} stroke={line.color} />
-          <circle cx={line.x2} cy={line.y2} r=".65" fill={line.color} />
-        </g>
-      ))}
-    </svg>
+    <div className={`flow-instruction-node ${selected ? "selected" : ""}`} style={{ "--node-color": definition.color }}>
+      <small>{definition.hint}</small>
+      <strong>{definition.label}</strong>
+      <span>{data.value}</span>
+      <em>{data.connectionCount} linked</em>
+      <Handle type="source" position={Position.Right} id="instruction" className="flow-source-handle" />
+    </div>
   );
 }
 
-function SlideElement({ element, selected, editing, linking, onPointerDown, onDoubleClick, onChange, onLink, onContext }) {
+function ObjectTargetNode() {
+  return (
+    <div className="flow-object-target">
+      <Handle type="target" position={Position.Left} id="ai-direction" className="flow-target-handle" />
+    </div>
+  );
+}
+
+const flowNodeTypes = {
+  instruction: InstructionFlowNode,
+  objectTarget: ObjectTargetNode,
+};
+
+function SlideElement({ element, assignedInstructions, selected, editing, onPointerDown, onDoubleClick, onChange, onContext }) {
   const position = { left: `${element.x}%`, top: `${element.y}%`, width: `${element.w}%`, height: `${element.h}%`, zIndex: selected ? 6 : element.type === "node" ? 4 : 2 };
-  if (element.type === "node") {
-    const definition = nodeTypes[element.nodeKind];
-    return (
-      <div className={`slide-element direction-node ${selected ? "selected" : ""} ${linking ? "linking" : ""}`} style={{ ...position, "--node-color": definition.color }} onPointerDown={(event) => onPointerDown(event, element)} onContextMenu={onContext}>
-        <small>{definition.hint}</small>
-        <strong>{definition.label}</strong>
-        <span>{element.value}</span>
-        <button type="button" className="node-port" title="Connect this node to an object" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onLink(); }} />
-        {selected && <span className="resize-handle" onPointerDown={(event) => onPointerDown(event, element, "resize")} />}
-      </div>
-    );
-  }
   const shapeStyle = element.type === "shape" ? {
     background: element.fill,
     border: `${element.borderWidth || 0}px solid ${element.borderColor}`,
@@ -699,6 +943,15 @@ function SlideElement({ element, selected, editing, linking, onPointerDown, onDo
         }}
         style={{ fontFamily: element.fontFamily, fontSize: `${Math.max(8, element.fontSize * 0.72)}px`, color: element.color, fontWeight: element.bold ? 700 : 400, fontStyle: element.italic ? "italic" : "normal", textAlign: element.align }}
       />
+      {assignedInstructions.length > 0 && (
+        <div className="attribute-chips">
+          {assignedInstructions.map((node) => (
+            <span key={node.id} style={{ "--chip-color": instructionTypes[node.nodeKind].color }}>
+              {instructionTypes[node.nodeKind].hint}: {node.value}
+            </span>
+          ))}
+        </div>
+      )}
       {selected && <span className="resize-handle" onPointerDown={(event) => onPointerDown(event, element, "resize")} />}
     </div>
   );
@@ -723,15 +976,15 @@ function SlideThumbnail({ slide, index, aspect, active, onSelect, onRefine, onCo
   );
 }
 
-function Inspector({ element, update, onDelete }) {
-  if (element.type === "node") {
-    const definition = nodeTypes[element.nodeKind];
+function Inspector({ element, isInstruction, update, onDelete, onGenerate, busy }) {
+  if (isInstruction) {
+    const definition = instructionTypes[element.nodeKind];
     return (
       <>
         <div className="inspector-title"><div><i style={{ background: definition.color }} /><strong>{definition.label}</strong></div><span>Node</span></div>
         <div className="panel-content">
           <Field label="Direction" value={element.value} onChange={(value) => update({ value })} area={element.nodeKind === "vibe"} />
-          <div className="node-help">Use the colored connector on the node, then click one or more objects that share this direction.</div>
+          <div className="node-help">Drag the colored handle on the node to one or more object handles. Select an arrow and press Delete to disconnect it.</div>
           <PositionGrid element={element} update={update} />
           <button type="button" className="delete-control" onClick={onDelete}>{icon("trash")} Delete node</button>
         </div>
@@ -743,6 +996,7 @@ function Inspector({ element, update, onDelete }) {
       <div className="inspector-title"><strong>{element.type === "text" ? "Text box" : "Shape"}</strong><span>Selected</span></div>
       <div className="panel-content">
         <Field label="Content" value={element.text} onChange={(value) => update({ text: value })} area />
+        <button type="button" className="generate-control" onClick={onGenerate} disabled={busy}>{icon("spark")} {busy ? "Generating..." : "Generate Selected"}</button>
         <Select label="Font" value={element.fontFamily} onChange={(value) => update({ fontFamily: value })} options={["Aptos", "Arial", "Helvetica Neue", "Georgia", "Times New Roman", "Courier New"]} />
         <RangeField label="Font size" value={element.fontSize} min="8" max="72" onChange={(value) => update({ fontSize: Number(value) })} />
         <ColorField label="Text color" value={element.color} onChange={(value) => update({ color: value })} />
