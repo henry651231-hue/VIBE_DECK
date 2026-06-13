@@ -6,12 +6,12 @@ import {
   MarkerType,
   Position,
   ReactFlow,
-  reconnectEdge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 const STORAGE_KEY = "vibe-deck-project-v1";
 const SETTINGS_KEY = "vibe-deck-settings-v1";
+const DEFAULT_SETTINGS = { provider: "openai", apiKey: "", model: "gpt-5.5" };
 
 const aspectRatios = { wide: 16 / 9, standard: 4 / 3, portrait: 3 / 4 };
 const instructionTypes = {
@@ -185,13 +185,14 @@ function App() {
   });
   const [settings, setSettings] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || { apiKey: "", model: "gpt-5.5" };
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY)) };
     } catch {
-      return { apiKey: "", model: "gpt-5.5" };
+      return DEFAULT_SETTINGS;
     }
   });
   const [currentSlideId, setCurrentSlideId] = useState(project.slides[0].id);
   const [selectedId, setSelectedId] = useState(null);
+  const [selectedSlideId, setSelectedSlideId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [panel, setPanel] = useState("context");
   const [history, setHistory] = useState([]);
@@ -217,6 +218,8 @@ function App() {
   const slideDropIndexRef = useRef(null);
   const splitRef = useRef(null);
   const fileInputRef = useRef(null);
+  const clipboardRef = useRef(null);
+  const flowInteractingRef = useRef(false);
 
   const slide = project.slides.find((item) => item.id === currentSlideId) || project.slides[0];
   const selected = slide.elements.find((element) => element.id === selectedId);
@@ -252,6 +255,14 @@ function App() {
         nodeKind: node.nodeKind,
         value: node.value,
         reusable: Boolean(node.libraryId),
+        onSelect: () => {
+          flowInteractingRef.current = true;
+          dragRef.current = null;
+          setSelectedId(node.id);
+          setSelectedSlideId(null);
+          setEditingId(null);
+          setContextMenu(null);
+        },
       },
       extent: [[0, 0], [Math.max(0, canvasSize.width - NODE_WIDTH), Math.max(0, canvasSize.height - NODE_HEIGHT)]],
     }));
@@ -272,7 +283,7 @@ function App() {
         target: `target:${edge.target}`,
         type: "smoothstep",
         markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
-        reconnectable: "target",
+        reconnectable: false,
         interactionWidth: 18,
         style: { stroke: instructionTypes[sourceNode?.nodeKind]?.color || "#6c55c9", strokeWidth: 2 },
       };
@@ -287,9 +298,21 @@ function App() {
         else undo();
         return;
       }
-      if ((event.key === "Delete" || event.key === "Backspace") && selectedId && !editingId && !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "c" && selected && !editingId && !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) {
         event.preventDefault();
-        removeElement(selectedId);
+        clipboardRef.current = { element: clone(selected), pasteCount: 0 };
+        setNotice("Object copied");
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v" && clipboardRef.current && !editingId && !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) {
+        event.preventDefault();
+        pasteObject();
+        return;
+      }
+      if ((event.key === "Delete" || event.key === "Backspace") && !editingId && !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) {
+        event.preventDefault();
+        if (selectedId) removeElement(selectedId);
+        else if (selectedSlideId) deleteSlide(selectedSlideId);
       }
       if (event.key === "Escape") {
         setEditingId(null);
@@ -325,25 +348,21 @@ function App() {
 
   const selectObject = (elementId) => {
     setSelectedId(elementId);
+    setSelectedSlideId(null);
     setEditingId(null);
-    const element = slide.elements.find((item) => item.id === elementId);
-    if (element?.aiUnreviewed) {
-      updateCurrentSlide((current) => ({
-        ...current,
-        elements: current.elements.map((item) => item.id === elementId ? { ...item, aiUnreviewed: false } : item),
-      }), false);
-    }
   };
 
   const addElement = (element) => {
     updateCurrentSlide((current) => ({ ...current, elements: [...current.elements, element] }));
     setSelectedId(element.id);
+    setSelectedSlideId(null);
     setEditingId(null);
   };
 
   const addInstructionNode = (node) => {
     updateCurrentSlide((current) => ({ ...current, instructionNodes: [...current.instructionNodes, node] }));
     setSelectedId(node.id);
+    setSelectedSlideId(null);
     setEditingId(null);
   };
 
@@ -364,6 +383,35 @@ function App() {
     setContextMenu(null);
   };
 
+  const pasteObject = () => {
+    const copied = clipboardRef.current;
+    if (!copied?.element) return;
+    copied.pasteCount += 1;
+    const offset = Math.min(10, copied.pasteCount * 2);
+    const element = {
+      ...clone(copied.element),
+      id: id(),
+      x: Math.max(0, Math.min(100 - copied.element.w, copied.element.x + offset)),
+      y: Math.max(0, Math.min(100 - copied.element.h, copied.element.y + offset)),
+      connections: [],
+      aiOutputs: [],
+      aiUnreviewed: false,
+    };
+    updateCurrentSlide((current) => ({ ...current, elements: [...current.elements, element] }));
+    setSelectedId(element.id);
+    setSelectedSlideId(null);
+    setEditingId(null);
+    setNotice("Object pasted");
+  };
+
+  const markOutputReviewed = (elementId) => {
+    updateCurrentSlide((current) => ({
+      ...current,
+      elements: current.elements.map((element) => element.id === elementId ? { ...element, aiUnreviewed: false } : element),
+    }));
+    setNotice("AI output marked reviewed");
+  };
+
   const addSlide = () => {
     const next = blankSlide();
     commit((current) => {
@@ -374,6 +422,7 @@ function App() {
     });
     setCurrentSlideId(next.id);
     setSelectedId(null);
+    setSelectedSlideId(next.id);
   };
 
   const copySlide = (slideId) => {
@@ -397,6 +446,7 @@ function App() {
       return { ...current, slides };
     });
     setCurrentSlideId(copied.id);
+    setSelectedSlideId(copied.id);
     setContextMenu(null);
   };
 
@@ -406,6 +456,8 @@ function App() {
     const fallback = project.slides[index - 1] || project.slides[index + 1];
     commit((current) => ({ ...current, slides: current.slides.filter((item) => item.id !== slideId) }));
     if (currentSlideId === slideId) setCurrentSlideId(fallback.id);
+    setSelectedSlideId(null);
+    setSelectedId(null);
     setContextMenu(null);
   };
 
@@ -449,6 +501,7 @@ function App() {
   };
 
   const onElementPointerDown = (event, element, mode = "move") => {
+    if (flowInteractingRef.current) return;
     event.preventDefault();
     event.stopPropagation();
     selectObject(element.id);
@@ -489,6 +542,7 @@ function App() {
       else setRightWidth(Math.max(240, Math.min(430, initial - delta)));
       return;
     }
+    if (flowInteractingRef.current) return;
     const drag = dragRef.current;
     if (!drag) return;
     const dx = ((event.clientX - drag.startX) / drag.rect.width) * 100;
@@ -516,6 +570,7 @@ function App() {
       setFuture([]);
       dragRef.current = null;
     }
+    flowInteractingRef.current = false;
     splitRef.current = null;
   };
 
@@ -540,6 +595,7 @@ function App() {
   }, []);
 
   const onFlowNodeDragStop = useCallback((_event, node) => {
+    flowInteractingRef.current = false;
     if (node.type !== "instruction") return;
     const maxX = Math.max(0, canvasSize.width - (node.measured?.width || NODE_WIDTH));
     const maxY = Math.max(0, canvasSize.height - (node.measured?.height || NODE_HEIGHT));
@@ -554,6 +610,7 @@ function App() {
   }, [canvasSize, slide.id]);
 
   const onFlowConnect = useCallback((connection) => {
+    flowInteractingRef.current = false;
     if (!connection.source || !connection.target?.startsWith("target:")) return;
     const target = connection.target.replace("target:", "");
     const sourceNode = slide.instructionNodes.find((node) => node.id === connection.source);
@@ -594,32 +651,6 @@ function App() {
     }
   }, [slide.id]);
 
-  const onFlowReconnect = useCallback((oldEdge, connection) => {
-    if (!connection.source || !connection.target?.startsWith("target:")) return;
-    const target = connection.target.replace("target:", "");
-    const sourceNode = slide.instructionNodes.find((node) => node.id === connection.source);
-    const duplicateType = slide.edges.some((edge) => {
-      if (edge.id === oldEdge.id) return false;
-      const node = slide.instructionNodes.find((item) => item.id === edge.source);
-      return edge.target === target && node?.nodeKind === sourceNode?.nodeKind;
-    });
-    if (duplicateType) {
-      setNotice("This object already has a writing direction");
-      return;
-    }
-    setFlowEdges((edges) => reconnectEdge(oldEdge, connection, edges));
-    updateCurrentSlide((current) => ({
-      ...current,
-      edges: current.edges.map((edge) => edge.id === oldEdge.id ? {
-        ...edge,
-        source: connection.source,
-        sourceHandle: connection.sourceHandle,
-        target,
-        targetHandle: connection.targetHandle,
-      } : edge),
-    }));
-  }, [slide.id, slide.edges, slide.instructionNodes]);
-
   const updateInstruction = (patch) => {
     const target = slide.instructionNodes.find((node) => node.id === selectedId);
     if (!target) return;
@@ -640,6 +671,26 @@ function App() {
           };
         }),
       }));
+      return;
+    }
+    if (patch.value !== undefined) {
+      commit((current) => {
+        const existing = current.nodeLibrary.find((node) => node.nodeKind === target.nodeKind && node.value.trim() === patch.value.trim());
+        const libraryNode = existing || { id: id(), nodeKind: target.nodeKind, value: patch.value };
+        return {
+          ...current,
+          nodeLibrary: existing ? current.nodeLibrary : [...current.nodeLibrary, libraryNode],
+          slides: current.slides.map((item) => item.id === slide.id ? {
+            ...item,
+            instructionNodes: item.instructionNodes.map((node) => node.id === selectedId ? { ...node, ...patch, libraryId: libraryNode.id } : node),
+            elements: target.nodeKind === "fontSize" && patch.value
+              ? item.elements.map((element) => item.edges.some((edge) => edge.source === selectedId && edge.target === element.id)
+                ? { ...element, fontSize: Number.parseInt(patch.value, 10) || element.fontSize }
+                : element)
+              : item.elements,
+          } : item),
+        };
+      });
       return;
     }
     updateCurrentSlide((current) => ({
@@ -861,7 +912,7 @@ function App() {
 
   const canvasStyle = useMemo(() => ({ aspectRatio: aspectRatios[project.aspect], background: slide.background }), [project.aspect, slide.background]);
   const workspaceColumns = slidesCollapsed
-    ? `44px minmax(480px, 1fr) 6px ${rightWidth}px`
+    ? `minmax(480px, 1fr) 6px ${rightWidth}px`
     : `${leftWidth}px 6px minmax(480px, 1fr) 6px ${rightWidth}px`;
 
   return (
@@ -880,22 +931,22 @@ function App() {
           <button type="button" className="icon-button" onClick={undo} disabled={!history.length} title="Undo">{icon("undo")}</button>
           <button type="button" className="icon-button" onClick={redo} disabled={!future.length} title="Redo">{icon("redo")}</button>
           <span className="save-state">{notice}</span>
-          <button type="button" onClick={() => setSettingsOpen(true)}>{icon("settings")} OpenAI</button>
+          <button type="button" onClick={() => setSettingsOpen(true)}>{icon("settings")} Settings</button>
           <button type="button" className="primary" onClick={exportPptx} disabled={busy}>{icon("download")} Export PPTX</button>
           <button type="button" className="deck-generate" onClick={() => generateScope("deck")} disabled={busy}>{icon("spark")} AI GEN ENTIRE DECK</button>
         </div>
       </header>
 
       <main className={`workspace ${slidesCollapsed ? "slides-collapsed" : ""}`} style={{ gridTemplateColumns: workspaceColumns }}>
-        <aside className={`slides-panel panel ${slidesCollapsed ? "collapsed" : ""}`}>
+        {!slidesCollapsed && <aside className="slides-panel panel">
           <div className="slides-header">
-            {!slidesCollapsed && <div><strong>Slides</strong><span>{project.slides.length}</span></div>}
+            <div><strong>Slides</strong><span>{project.slides.length}</span></div>
             <span className="slides-header-actions">
-              {!slidesCollapsed && <button type="button" onClick={addSlide} title="Add slide after current">{icon("add")}</button>}
-              <button type="button" onClick={() => setSlidesCollapsed((value) => !value)} title={slidesCollapsed ? "Show slides" : "Hide slides"}>{icon("panel")}</button>
+              <button type="button" onClick={addSlide} title="Add slide after current">{icon("add")}</button>
+              <button type="button" onClick={() => setSlidesCollapsed(true)} title="Hide slides">{icon("panel")}</button>
             </span>
           </div>
-          {!slidesCollapsed && <div className="slide-list">
+          <div className="slide-list">
             <SlideDropZone active={dropIndex === 0} onDragOver={() => setDropIndex(0)} onDrop={(draggedId) => reorderSlide(draggedId || draggedSlideId, 0)} />
             {project.slides.map((item, index) => (
               <div key={item.id}>
@@ -906,20 +957,21 @@ function App() {
                   active={item.id === slide.id}
                   dragging={item.id === draggedSlideId}
                   onDragStart={(event) => startSlideDrag(event, item.id)}
-                  onSelect={() => { setCurrentSlideId(item.id); setSelectedId(null); setEditingId(null); }}
+                  onSelect={() => { setCurrentSlideId(item.id); setSelectedSlideId(item.id); setSelectedId(null); setEditingId(null); }}
                   onGenerate={() => { setCurrentSlideId(item.id); generateScope("slide", item); }}
                   onContext={(event) => { event.preventDefault(); event.stopPropagation(); setContextMenu({ kind: "slide", id: item.id, x: event.clientX, y: event.clientY }); }}
                 />
                 <SlideDropZone active={dropIndex === index + 1} onDragOver={() => setDropIndex(index + 1)} onDrop={(draggedId) => reorderSlide(draggedId || draggedSlideId, index + 1)} />
               </div>
             ))}
-          </div>}
-        </aside>
+          </div>
+        </aside>}
 
         {!slidesCollapsed && <div className="split-handle" onPointerDown={(event) => startSplit(event, "left")} />}
 
         <section className="stage">
           <div className="canvas-toolbar">
+            {slidesCollapsed && <button type="button" className="show-slides" onClick={() => setSlidesCollapsed(false)} title="Show slides">{icon("panel")}</button>}
             <button type="button" onClick={() => addElement(newText(project.defaults))}>{icon("add")} Text box</button>
             <button type="button" onClick={() => addElement(newShape(project.defaults))}>{icon("box")} Shape</button>
             <div className={`node-picker ${nodeMenuOpen ? "open" : ""}`}>
@@ -950,7 +1002,12 @@ function App() {
                 className="slide-canvas"
                 ref={canvasRef}
                 style={canvasStyle}
-                onPointerDown={() => { setSelectedId(null); setEditingId(null); }}
+                onPointerDown={(event) => {
+                  if (event.target !== event.currentTarget && event.target.closest(".react-flow")) return;
+                  setSelectedId(null);
+                  setSelectedSlideId(null);
+                  setEditingId(null);
+                }}
                 onContextMenu={(event) => event.preventDefault()}
               >
               <div className="flow-overlay">
@@ -959,16 +1016,29 @@ function App() {
                   edges={flowEdges}
                   nodeTypes={flowNodeTypes}
                   onNodesChange={onFlowNodesChange}
+                  onNodeDragStart={(_event, node) => {
+                    flowInteractingRef.current = true;
+                    dragRef.current = null;
+                    if (node.type === "instruction") {
+                      setSelectedId(node.id);
+                      setSelectedSlideId(null);
+                      setEditingId(null);
+                    }
+                  }}
                   onNodeDragStop={onFlowNodeDragStop}
                   onEdgesChange={onFlowEdgesChange}
                   onConnect={onFlowConnect}
-                  onReconnect={onFlowReconnect}
+                  onConnectStart={() => {
+                    flowInteractingRef.current = true;
+                    dragRef.current = null;
+                  }}
+                  onConnectEnd={() => { flowInteractingRef.current = false; }}
                   onNodeClick={(_event, node) => node.type === "instruction" && setSelectedId(node.id)}
                   onEdgeClick={(_event, edge) => setSelectedId(edge.id)}
                   nodesConnectable
-                  edgesReconnectable
+                  edgesReconnectable={false}
                   nodeExtent={[[0, 0], [canvasSize.width, canvasSize.height]]}
-                  deleteKeyCode={["Backspace", "Delete"]}
+                  deleteKeyCode={null}
                   panOnDrag={false}
                   zoomOnScroll={false}
                   zoomOnPinch={false}
@@ -1026,6 +1096,7 @@ function App() {
               onReusableChange={setNodeReusable}
               onDelete={() => removeElement(selectedId)}
               onGenerate={selected ? generateSelected : undefined}
+              onMarkReviewed={selected?.aiUnreviewed ? () => markOutputReviewed(selected.id) : undefined}
               busy={selected ? generatingIds.includes(selected.id) : false}
             />
           ) : (
@@ -1070,11 +1141,13 @@ function App() {
       )}
 
       {settingsOpen && (
-        <Modal title="OpenAI Connection" onClose={() => setSettingsOpen(false)}>
+        <Modal title="Settings" onClose={() => setSettingsOpen(false)}>
           <div className="connection-settings">
+            <Select label="AI provider" value={settings.provider} onChange={(value) => setSettings((current) => ({ ...current, provider: value }))} options={[["openai", "OpenAI (GPT)"]]} />
             <Field label="OpenAI API key" type="password" value={settings.apiKey} onChange={(value) => setSettings((current) => ({ ...current, apiKey: value }))} placeholder="sk-..." />
-            <Field label="Model" value={settings.model} onChange={(value) => setSettings((current) => ({ ...current, model: value }))} placeholder="gpt-5.5" />
-            <p className="security-note">AI uses only the writing-direction node connected to each text object.</p>
+            <Field label="GPT model" value={settings.model} onChange={(value) => setSettings((current) => ({ ...current, model: value }))} placeholder="gpt-5.5" />
+            <p className="security-note">Gemini and Claude providers can be added here in a future release.</p>
+            <p className="security-note">AI uses only the node attributes connected to each text object.</p>
           </div>
           <button type="button" className="primary full" onClick={() => setSettingsOpen(false)}>Save settings</button>
         </Modal>
@@ -1086,7 +1159,7 @@ function App() {
 function InstructionFlowNode({ data, selected }) {
   const definition = instructionTypes[data.nodeKind];
   return (
-    <div className={`flow-instruction-node ${selected ? "selected" : ""}`} style={{ "--node-color": definition.color }}>
+    <div className={`flow-instruction-node ${selected ? "selected" : ""}`} style={{ "--node-color": definition.color }} onPointerDown={data.onSelect}>
       <small>{definition.hint}</small>
       <span title={data.value}>{data.value}</span>
       {data.reusable && <b className="reusable-mark">USED</b>}
@@ -1098,10 +1171,10 @@ function InstructionFlowNode({ data, selected }) {
 function ObjectTargetNode() {
   return (
     <div className="flow-object-target">
-      <Handle type="target" position={Position.Top} id="top" className="flow-target-handle" />
-      <Handle type="target" position={Position.Right} id="right" className="flow-target-handle" />
-      <Handle type="target" position={Position.Bottom} id="bottom" className="flow-target-handle" />
-      <Handle type="target" position={Position.Left} id="left" className="flow-target-handle" />
+      <Handle type="target" position={Position.Top} id="top" className="flow-target-handle" isConnectableStart={false} isConnectableEnd />
+      <Handle type="target" position={Position.Right} id="right" className="flow-target-handle" isConnectableStart={false} isConnectableEnd />
+      <Handle type="target" position={Position.Bottom} id="bottom" className="flow-target-handle" isConnectableStart={false} isConnectableEnd />
+      <Handle type="target" position={Position.Left} id="left" className="flow-target-handle" isConnectableStart={false} isConnectableEnd />
     </div>
   );
 }
@@ -1120,7 +1193,7 @@ function SlideElement({ element, assignedInstructions, selected, editing, onPoin
   } : {};
   return (
     <div className={`slide-element content-object ${element.type} ${selected ? "selected" : ""} ${editing ? "editing" : ""}`} style={{ ...position, ...shapeStyle }} onPointerDown={(event) => onPointerDown(event, element)} onDoubleClick={(event) => { event.stopPropagation(); onDoubleClick(); }} onContextMenu={onContext}>
-      {element.type === "text" && <textarea
+      {element.type === "text" && <div className="text-content-clip"><textarea
           value={element.text}
           readOnly={!editing}
           autoFocus={editing}
@@ -1130,7 +1203,7 @@ function SlideElement({ element, assignedInstructions, selected, editing, onPoin
             if (editing) event.stopPropagation();
           }}
           style={{ fontFamily: element.fontFamily, fontSize: `${Math.max(8, element.fontSize * 0.72)}px`, color: element.color, fontWeight: element.bold ? 700 : 400, fontStyle: element.italic ? "italic" : "normal", textAlign: element.align }}
-        />}
+        /></div>}
       {element.type === "text" && (
         <button type="button" className={`object-ai ${generating ? "generating" : ""}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onGenerate(); }} title="AI Gen this object" disabled={generating}>
           {icon(generating ? "clock" : "spark")}
@@ -1181,7 +1254,7 @@ function SlideDropZone({ active }) {
   return <div className={`slide-drop-zone ${active ? "active" : ""}`} />;
 }
 
-function Inspector({ element, isInstruction, update, reusable, onReusableChange, onDelete, onGenerate, busy }) {
+function Inspector({ element, isInstruction, update, reusable, onReusableChange, onDelete, onGenerate, onMarkReviewed, busy }) {
   if (isInstruction) {
     const definition = instructionTypes[element.nodeKind];
     return (
@@ -1211,6 +1284,7 @@ function Inspector({ element, isInstruction, update, reusable, onReusableChange,
                 {element.aiUnreviewed && <span>{icon("unread")} New</span>}
               </div>
               <button type="button" className="generate-control" onClick={onGenerate} disabled={busy}>{icon(busy ? "clock" : "spark")} {busy ? "Generating..." : "Generate options"}</button>
+              {element.aiUnreviewed && <button type="button" className="review-control" onClick={onMarkReviewed}>{icon("unread")} Mark reviewed</button>}
               <div className="output-list">
                 {(element.aiOutputs || []).map((output, index) => (
                   <article key={`${output}-${index}`}><small>OPTION {index + 1}</small><p>{output}</p></article>
